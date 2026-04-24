@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/pdf-core",
+    "crates/shared-types",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+authors = ["simple.pdf contributors"]
+repository = "https://github.com/catalinilie/simple.pdf"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ts-rs = { version = "10", features = ["serde-compat", "uuid-impl"] }
+
+tauri = { version = "2", features = [] }
+tauri-build = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-os = "2"
+tauri-plugin-single-instance = "2"
+
+pdfium-render = { version = "0.8", default-features = false, features = ["image", "thread_safe"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+incremental = false
+
+[profile.dev]
+opt-level = 0
+debug = 1

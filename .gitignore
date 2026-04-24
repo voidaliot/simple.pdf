@@ -30,6 +30,7 @@ resources/pdfium/pdfium.dll.lib
 # IDE / editor
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
