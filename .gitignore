@@ -1,0 +1,47 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+.pnpm-store/
+
+# Tauri build output
+crates/app/gen/
+crates/app/target/
+src-tauri/target/
+
+# Distribution artifacts
+dist/
+*.zip
+*.msi
+*.exe.bak
+
+# Generated TS types
+frontend/src/types-generated/
+
+# PDFium binary (downloaded by setup script; large binary, do not commit)
+resources/pdfium/pdfium.dll
+resources/pdfium/pdfium.dll.lib
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# App runtime data (only created when running portable mode in-tree)
+data/
+*.log
+logs/
+
+# Secrets / local overrides
+.env
+.env.local
+*.local
