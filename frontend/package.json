@@ -16,7 +16,7 @@
     "@tauri-apps/plugin-os": "^2"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^4",
+    "@sveltejs/vite-plugin-svelte": "^5",
     "@tsconfig/svelte": "^5",
     "svelte": "^5",
     "svelte-check": "^4",

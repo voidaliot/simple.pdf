@@ -1,4 +1,12 @@
 use crate::{Document, PdfError, PdfResult};
+use image::{DynamicImage, RgbaImage};
+use pdfium_render::prelude::*;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageSize {
+    pub width: f32,
+    pub height: f32,
+}
 
 #[derive(Debug, Clone)]
 pub struct RenderRequest {
@@ -6,14 +14,25 @@ pub struct RenderRequest {
     pub scale: f32,
 }
 
-pub struct PageRender {
-    pub width: u32,
-    pub height: u32,
-    pub bgra: Vec<u8>,
-}
-
 impl Document {
-    pub fn render_page(&self, req: RenderRequest) -> PdfResult<PageRender> {
+    pub fn page_sizes(&self) -> PdfResult<Vec<PageSize>> {
+        self.with_doc(|doc| {
+            let pages = doc.pages();
+            let mut sizes = Vec::with_capacity(pages.len() as usize);
+            for i in 0..pages.len() {
+                let page = pages
+                    .get(i)
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+                sizes.push(PageSize {
+                    width: page.width().value,
+                    height: page.height().value,
+                });
+            }
+            Ok(sizes)
+        })
+    }
+
+    pub fn render_page_png(&self, req: RenderRequest) -> PdfResult<Vec<u8>> {
         self.with_doc(|doc| {
             let pages = doc.pages();
             if req.page_index >= pages.len() as u32 {
@@ -28,7 +47,6 @@ impl Document {
             let px_w = (page_w * req.scale).round().max(1.0) as i32;
             let px_h = (page_h * req.scale).round().max(1.0) as i32;
 
-            use pdfium_render::prelude::*;
             let config = PdfRenderConfig::new()
                 .set_target_width(px_w)
                 .set_maximum_height(px_h);
@@ -37,17 +55,16 @@ impl Document {
                 .render_with_config(&config)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
 
-            let img = bitmap.as_image().into_rgba8();
-            let (w, h) = img.dimensions();
-            let mut bgra = img.into_raw();
-            for chunk in bgra.chunks_exact_mut(4) {
-                chunk.swap(0, 2);
-            }
-            Ok(PageRender {
-                width: w,
-                height: h,
-                bgra,
-            })
+            let img: RgbaImage = bitmap
+                .as_image()
+                .into_rgba8();
+
+            let mut buf = std::io::Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(img)
+                .write_to(&mut buf, image::ImageFormat::Png)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+
+            Ok(buf.into_inner())
         })
     }
 }

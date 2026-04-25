@@ -7,6 +7,11 @@ export interface OpenedDocument {
   page_count: number;
 }
 
+export interface PageSize {
+  width: number;
+  height: number;
+}
+
 export interface AppVersion {
   name: string;
   version: string;
@@ -25,6 +30,16 @@ export async function closeDocument(id: string): Promise<void> {
   return invoke("close_document", { id });
 }
 
+export async function getPageSizes(id: string): Promise<PageSize[]> {
+  return invoke<PageSize[]>("get_page_sizes", { id });
+}
+
 export async function pendingOpenFiles(): Promise<string[]> {
   return invoke<string[]>("pending_open_files");
+}
+
+/** Build the pdf:// URL for a page image. */
+export function pageUrl(docId: string, pageIndex: number, scale: number): string {
+  const s = scale.toFixed(3);
+  return `pdf://localhost/page/${docId}/${pageIndex}?scale=${s}`;
 }

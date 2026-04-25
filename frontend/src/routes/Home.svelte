@@ -25,7 +25,7 @@
   </header>
 
   <div class="actions">
-    <button class="primary" on:click={pickAndOpen}>Open file…</button>
+    <button class="primary" onclick={pickAndOpen}>Open file…</button>
     <button disabled title="Coming in M2">Open folder</button>
     <button disabled title="Coming in M2">Paste URL</button>
   </div>

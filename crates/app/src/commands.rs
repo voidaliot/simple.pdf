@@ -1,10 +1,10 @@
 use crate::state::AppState;
-use pdf_core::RenderRequest;
+use pdf_core::PageSize;
 use serde::Serialize;
 use shared_types::AppVersion;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{ipc::Response, State};
+use tauri::State;
 use uuid::Uuid;
 
 #[tauri::command]
@@ -36,12 +36,7 @@ pub fn open_document(path: String, state: State<AppState>) -> Result<OpenedDocum
         .unwrap_or("untitled")
         .to_string();
     state.docs.lock().insert(id, Arc::new(doc));
-    Ok(OpenedDocument {
-        id: id.to_string(),
-        path,
-        title,
-        page_count,
-    })
+    Ok(OpenedDocument { id: id.to_string(), path, title, page_count })
 }
 
 #[tauri::command]
@@ -52,27 +47,13 @@ pub fn close_document(id: String, state: State<AppState>) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn render_page(
-    id: String,
-    page_index: u32,
-    scale: f32,
-    state: State<AppState>,
-) -> Result<Response, String> {
+pub fn get_page_sizes(id: String, state: State<AppState>) -> Result<Vec<PageSize>, String> {
     let uid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let doc = {
         let map = state.docs.lock();
         map.get(&uid).cloned().ok_or("unknown doc id")?
     };
-    let out = doc
-        .render_page(RenderRequest { page_index, scale })
-        .map_err(|e| e.to_string())?;
-    let header_len = 8u32;
-    let mut buf = Vec::with_capacity(8 + out.bgra.len());
-    buf.extend_from_slice(&out.width.to_le_bytes());
-    buf.extend_from_slice(&out.height.to_le_bytes());
-    buf.extend_from_slice(&out.bgra);
-    let _ = header_len;
-    Ok(Response::new(buf))
+    doc.page_sizes().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

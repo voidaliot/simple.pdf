@@ -12,29 +12,30 @@
 <div class="tabbar" role="tablist">
   <div class="tabs">
     {#each tabs.list as tab (tab.id)}
-      <button
+      <!-- Use div+role=tab to avoid nested <button> (invalid HTML) -->
+      <div
         class="tab"
         class:active={tab.id === tabs.activeId}
         role="tab"
+        tabindex="0"
         aria-selected={tab.id === tabs.activeId}
         title={tab.path ?? tab.title}
-        on:click={() => tabs.activate(tab.id)}
-        on:mousedown={(e) => onMouseDown(e, tab.id)}
+        onclick={() => tabs.activate(tab.id)}
+        onmousedown={(e) => onMouseDown(e, tab.id)}
+        onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") tabs.activate(tab.id); }}
       >
         <span class="title">{tab.dirty ? "• " : ""}{tab.title}</span>
         {#if tabs.list.length > 1 || tab.kind !== "home"}
-          <span
+          <button
             class="close"
-            aria-label="Close tab"
-            role="button"
+            aria-label="Close {tab.title} tab"
             tabindex="-1"
-            on:click|stopPropagation={() => tabs.close(tab.id)}
-            on:keydown|stopPropagation
-          >×</span>
+            onclick={(e) => { e.stopPropagation(); tabs.close(tab.id); }}
+          >×</button>
         {/if}
-      </button>
+      </div>
     {/each}
-    <button class="new-tab" aria-label="New tab" on:click={() => tabs.openHome()}>+</button>
+    <button class="new-tab" aria-label="New tab" onclick={() => tabs.openHome()}>+</button>
   </div>
   <div class="drag-region" data-tauri-drag-region></div>
 </div>
@@ -67,7 +68,7 @@
     border: 1px solid var(--border);
     border-bottom: none;
     border-radius: 8px 8px 0 0;
-    padding: 6px 10px;
+    padding: 6px 8px 6px 12px;
     max-width: 220px;
     min-width: 120px;
     cursor: pointer;
@@ -88,11 +89,21 @@
     text-align: left;
   }
   .close {
-    font-size: 16px;
+    font-size: 15px;
     line-height: 1;
-    padding: 2px 6px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
     border-radius: 4px;
-    opacity: 0.6;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
   }
   .close:hover { background: rgba(127,127,127,0.2); opacity: 1; }
   .new-tab {
