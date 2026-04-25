@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "cd crates/app && node ../../frontend/node_modules/@tauri-apps/cli/tauri.js dev",
+    "build": "cd crates/app && node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build"
+  }
+}

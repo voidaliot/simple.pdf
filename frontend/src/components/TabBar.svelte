@@ -1,28 +1,64 @@
 <script lang="ts">
   import { tabs } from "../stores/tabs.svelte";
 
+  let dragFrom = $state<number | null>(null);
+  let dragOver = $state<number | null>(null);
+
   function onMouseDown(e: MouseEvent, id: string) {
     if (e.button === 1) {
       e.preventDefault();
       tabs.close(id);
     }
   }
+
+  function onDragStart(e: DragEvent, idx: number) {
+    dragFrom = idx;
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  }
+
+  function onDragOver(e: DragEvent, idx: number) {
+    if (dragFrom === null || dragFrom === idx) return;
+    e.preventDefault();
+    dragOver = idx;
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  }
+
+  function onDrop(e: DragEvent, idx: number) {
+    e.preventDefault();
+    if (dragFrom !== null && dragFrom !== idx) {
+      tabs.reorder(dragFrom, idx);
+    }
+    dragFrom = null;
+    dragOver = null;
+  }
+
+  function onDragEnd() {
+    dragFrom = null;
+    dragOver = null;
+  }
 </script>
 
 <div class="tabbar" role="tablist">
   <div class="tabs">
-    {#each tabs.list as tab (tab.id)}
-      <!-- Use div+role=tab to avoid nested <button> (invalid HTML) -->
+    {#each tabs.list as tab, i (tab.id)}
       <div
         class="tab"
         class:active={tab.id === tabs.activeId}
+        class:drag-over={dragOver === i}
         role="tab"
         tabindex="0"
         aria-selected={tab.id === tabs.activeId}
         title={tab.path ?? tab.title}
+        draggable="true"
         onclick={() => tabs.activate(tab.id)}
         onmousedown={(e) => onMouseDown(e, tab.id)}
-        onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") tabs.activate(tab.id); }}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") tabs.activate(tab.id);
+        }}
+        ondragstart={(e) => onDragStart(e, i)}
+        ondragover={(e) => onDragOver(e, i)}
+        ondrop={(e) => onDrop(e, i)}
+        ondragend={onDragEnd}
       >
         <span class="title">{tab.dirty ? "• " : ""}{tab.title}</span>
         {#if tabs.list.length > 1 || tab.kind !== "home"}
@@ -30,7 +66,10 @@
             class="close"
             aria-label="Close {tab.title} tab"
             tabindex="-1"
-            onclick={(e) => { e.stopPropagation(); tabs.close(tab.id); }}
+            onclick={(e) => {
+              e.stopPropagation();
+              tabs.close(tab.id);
+            }}
           >×</button>
         {/if}
       </div>
@@ -81,6 +120,7 @@
     box-shadow: var(--shadow-sm);
   }
   .tab:hover { color: var(--fg); }
+  .tab.drag-over { border-left: 2px solid var(--accent); }
   .title {
     flex: 1;
     overflow: hidden;

@@ -1,9 +1,60 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import TabBar from "./components/TabBar.svelte";
   import Home from "./routes/Home.svelte";
   import Viewer from "./routes/Viewer.svelte";
   import { tabs } from "./stores/tabs.svelte";
+  import { pendingOpenFiles } from "./lib/ipc";
+  import { pickAndOpen, openPath } from "./lib/open";
+
+  async function drainPending() {
+    const files = await pendingOpenFiles();
+    for (const f of files) {
+      await openPath(f).catch(console.error);
+    }
+  }
+
+  onMount(() => {
+    drainPending();
+    let unlisten: (() => void) | undefined;
+    listen("files-queued", drainPending).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      unlisten?.();
+    };
+  });
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (!e.ctrlKey) return;
+    switch (e.key) {
+      case "t":
+        e.preventDefault();
+        tabs.openHome();
+        break;
+      case "w":
+        e.preventDefault();
+        tabs.close(tabs.activeId);
+        break;
+      case "o":
+        e.preventDefault();
+        pickAndOpen();
+        break;
+      case "Tab": {
+        e.preventDefault();
+        const list = tabs.list;
+        const idx = list.findIndex((t) => t.id === tabs.activeId);
+        const next =
+          list[(idx + (e.shiftKey ? -1 : 1) + list.length) % list.length];
+        if (next) tabs.activate(next.id);
+        break;
+      }
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onKeyDown} />
 
 <div class="shell">
   <TabBar />

@@ -15,11 +15,10 @@ This file tracks implementation progress against the requirements in [requiremen
 - [x] `crates/shared-types` — ts-rs emitter set up
 - [x] `crates/app` — Tauri 2 binary with single window
 - [x] `frontend/` — Svelte 5 + Vite + TypeScript scaffold; svelte-check 0 errors
-- [ ] `resources/pdfium/pdfium.dll` downloaded, bundled next to exe in release
-- [ ] IPC ping round-trip working (`invoke("version")`) — needs `cargo tauri dev`
+- [x] `resources/pdfium/pdfium.dll` placed in `resources/pdfium/`
+- [~] IPC ping round-trip verified (`invoke("app_version")`) — code complete; run `cargo tauri dev` to confirm
 - [x] `.gitignore`, `README.md`, license chosen
 - [x] `git tag m0-skeleton`
-- Note: `scripts/fetch-pdfium.ps1` provided; Rust toolchain install needed to build
 
 ### M1 — Render [~] (2026-04-25)
 
@@ -28,24 +27,30 @@ This file tracks implementation progress against the requirements in [requiremen
 - [x] Virtualized scroll — IntersectionObserver renders ±1 pages around viewport (NFR-PERF-02)
 - [x] Zoom: fit-width / fit-page / custom % / Ctrl+Wheel (FR-VIEW-05, UX-ZOOM-01)
 - [x] Toolbar: page-number input, zoom controls, doc title
-- [ ] Text layer overlay for selection and copy (FR-VIEW-03) — next iteration
-- [ ] Find-in-page (Ctrl+F) with next/prev and highlight-all (FR-VIEW-04) — next iteration
-- [ ] Rotate view 90° / 180° / 270° (FR-VIEW-06) — next iteration
-- Note: awaiting `cargo tauri dev` verification once Rust toolchain installed
+- [x] Skeleton shimmer while page loads; error overlay on render failure
+- [ ] First-run smoke test: `cargo tauri dev` → open a PDF → pages render correctly
+- [ ] Text layer overlay for selection and copy (FR-VIEW-03)
+- [ ] Find-in-page (Ctrl+F) with next/prev and highlight-all (FR-VIEW-04)
+- [ ] Rotate view 90° / 180° / 270° (FR-VIEW-06)
 
-### M2 — Tabs & Home
+### M2 — Tabs & Home [~]
 
-- [ ] Browser-style tab bar (FR-TAB-01)
-- [ ] `+` button opens home tab
-- [ ] Home: thumbnail grid of recents (FR-HOME-01)
-- [ ] Pin/unpin recents; pinned section on top (FR-HOME-02)
-- [ ] Live-filter search over recents (FR-HOME-03)
-- [ ] Quick actions: open file, open folder, paste URL (FR-HOME-04)
-- [ ] Right-click: remove from recents / reveal in Explorer (FR-HOME-05)
-- [ ] Keyboard shortcuts — Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+O, Ctrl+F, Ctrl+S (UX-KBD-01)
-- [ ] Drag to reorder tabs (FR-TAB-03)
-- [ ] Middle-click closes tab (FR-TAB-04)
-- [ ] Dirty-tab close confirmation (FR-TAB-02)
+- [x] Browser-style tab bar — `TabBar.svelte` renders tab list, active state, close × (FR-TAB-01)
+- [x] `+` button opens home tab — `tabs.openHome()` wired in TabBar
+- [x] Middle-click closes tab (FR-TAB-04)
+- [x] Drag to reorder tabs — HTML5 drag events wired to `tabs.reorder()` with drop-indicator (FR-TAB-03)
+- [x] Global keyboard shortcuts — Ctrl+T, Ctrl+W, Ctrl+Tab/Shift+Tab, Ctrl+O in `App.svelte` (UX-KBD-01)
+- [x] Pending files on startup — `drainPending()` on mount + `files-queued` event listener
+- [x] Recents persistence — `localStorage`-backed `recents` store (`stores/recents.svelte.ts`)
+- [x] Home: recents grid, pinned section first, filter derived from search input (FR-HOME-01..03)
+- [x] Pin/unpin via right-click context menu; pinned badge on card (FR-HOME-02)
+- [x] Right-click: remove from recents / pin (FR-HOME-05)
+- [x] Open file quick action calls shared `lib/open.ts` which adds to recents (FR-HOME-04)
+- [ ] Home thumbnail — render page 0 at low scale; for now placeholder gradient shown
+- [ ] Open folder quick action — walk dir for PDFs (FR-HOME-04)
+- [ ] Paste URL quick action (FR-HOME-04)
+- [ ] Reveal in Explorer context menu item (FR-HOME-05)
+- [ ] Dirty-tab close confirmation dialog (FR-TAB-02)
 
 ### M3 — Annotations (read)
 
@@ -120,3 +125,5 @@ Each of these must pass before v1 is declared done. See `requirements.md` for pe
 
 - 2026-04-24 — Project kicked off. Plan, requirements, and M0 skeleton scaffolded (Cargo workspace, Svelte 5 frontend, Tauri 2 app).
 - 2026-04-25 — M1 render pipeline: `pdf://` URI scheme, PNG render via PDFium, IntersectionObserver virtualized scroll, fit-width/fit-page/custom zoom, toolbar. svelte-check 0 errors 0 warnings.
+- 2026-04-25 — Rust toolchain installed; `pdfium.dll` placed in `resources/pdfium/`. M0 now buildable. M2 tab bar, Home route, and viewer store partially scaffolded. First `cargo tauri dev` run is the immediate next step.
+- 2026-04-25 — M2 batch: recents store (localStorage), `lib/open.ts` shared utility, keyboard shortcuts (Ctrl+T/W/Tab/O), pending-files drain on startup, Home recents grid with filter + pin/unpin context menu, drag-to-reorder tabs. Dev workflow fixed: `pnpm dev` from repo root via `package.json` shim.
