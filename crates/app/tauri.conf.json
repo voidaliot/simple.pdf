@@ -36,8 +36,10 @@
     "resources": {
       "../../resources/pdfium/pdfium.dll": "pdfium.dll"
     },
-    "nsis": {
-      "installMode": "currentUser"
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
     }
   }
 }
