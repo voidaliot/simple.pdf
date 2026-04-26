@@ -38,7 +38,7 @@ impl Document {
             let pw = page.width().value;
             let ph = page.height().value;
             let annotations = page.annotations();
-            let count = annotations.len(); // usize in pdfium-render 0.8
+            let count = annotations.len();
 
             let mut result = Vec::with_capacity(count);
             for i in 0..count {
@@ -83,14 +83,19 @@ impl Document {
     ) -> PdfResult<u32> {
         self.with_doc(|doc| {
             let pages = doc.pages();
-            let page = pages
+            let mut page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
             let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-            let pdf_color = PdfColor::new(color[0], color[1], color[2], alpha);
-            let annots = page.annotations();
-            create_markup_annotation(&annots, MarkupKind::Highlight, rects, pdf_color, pw, ph)
+            create_markup_annotation(
+                page.annotations_mut(),
+                MarkupKind::Highlight,
+                rects,
+                PdfColor::new(color[0], color[1], color[2], alpha),
+                pw,
+                ph,
+            )
         })
     }
 
@@ -102,13 +107,12 @@ impl Document {
     ) -> PdfResult<u32> {
         self.with_doc(|doc| {
             let pages = doc.pages();
-            let page = pages
+            let mut page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
-            let annots = page.annotations();
             create_markup_annotation(
-                &annots,
+                page.annotations_mut(),
                 MarkupKind::Underline,
                 rects,
                 PdfColor::new(color[0], color[1], color[2], 200),
@@ -126,13 +130,12 @@ impl Document {
     ) -> PdfResult<u32> {
         self.with_doc(|doc| {
             let pages = doc.pages();
-            let page = pages
+            let mut page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
-            let annots = page.annotations();
             create_markup_annotation(
-                &annots,
+                page.annotations_mut(),
                 MarkupKind::Strikeout,
                 rects,
                 PdfColor::new(color[0], color[1], color[2], 200),
@@ -153,7 +156,7 @@ impl Document {
     ) -> PdfResult<u32> {
         self.with_doc(|doc| {
             let pages = doc.pages();
-            let page = pages
+            let mut page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
@@ -166,7 +169,7 @@ impl Document {
             );
 
             let title = author.unwrap_or("Note");
-            let annots = page.annotations();
+            let annots = page.annotations_mut();
             {
                 let mut sticky = annots
                     .create_text_annotation(title)
@@ -194,13 +197,11 @@ impl Document {
     ) -> PdfResult<u32> {
         self.with_doc(|doc| {
             let pages = doc.pages();
-            let page = pages
+            let mut page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
-            let annots = page.annotations();
 
-            // Compute bounding box of all points
             let mut xmin = f32::MAX;
             let mut ymin = f32::MAX;
             let mut xmax = f32::MIN;
@@ -214,6 +215,7 @@ impl Document {
                 }
             }
 
+            let annots = page.annotations_mut();
             {
                 let mut ink = annots
                     .create_ink_annotation()
@@ -230,8 +232,6 @@ impl Document {
                     );
                     let _ = ink.set_bounds(rect);
                 }
-                // Note: pdfium-render 0.8 ink path API (ink_list_mut / PdfPoint)
-                // is not available in this version; bounds-only annotation is stored.
             }
             Ok(annots.len().saturating_sub(1) as u32)
         })
@@ -240,11 +240,18 @@ impl Document {
     pub fn remove_annotation(&self, page_index: u32, annot_index: u32) -> PdfResult<()> {
         self.with_doc(|doc| {
             let pages = doc.pages();
-            let page = pages
+            let mut page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
-            page.annotations()
-                .delete_annotation(annot_index)
+            // Get the annotation object (borrows 'a = library lifetime, not &page).
+            // The temporary &PdfPageAnnotations borrow is released after .get() returns.
+            let annot = page
+                .annotations()
+                .get(annot_index as usize)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            // Now mutably borrow annotations to delete — 'a is shared (library), no conflict.
+            page.annotations_mut()
+                .delete_annotation(annot)
                 .map_err(|e| PdfError::Render(e.to_string()))
         })
     }
@@ -262,12 +269,12 @@ impl Document {
     }
 }
 
-// ── Internal helpers ───────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 enum MarkupKind { Highlight, Underline, Strikeout }
 
 fn create_markup_annotation(
-    annots: &PdfPageAnnotations<'_>,
+    annots: &mut PdfPageAnnotations<'_>,
     kind: MarkupKind,
     rects: &[AnnRect],
     color: PdfColor,
@@ -344,9 +351,7 @@ fn screen_to_pdf(r: &AnnRect, pw: f32, ph: f32) -> PdfRect {
 }
 
 fn union_rects(rects: &[AnnRect]) -> Option<AnnRect> {
-    if rects.is_empty() {
-        return None;
-    }
+    if rects.is_empty() { return None; }
     let (mut l, mut t, mut r, mut b) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for rect in rects {
         l = l.min(rect.left);
