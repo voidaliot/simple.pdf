@@ -18,8 +18,7 @@
         "minWidth": 720,
         "minHeight": 480,
         "decorations": true,
-        "resizable": true,
-        "fileDropEnabled": true
+        "resizable": true
       }
     ],
     "security": {
@@ -37,11 +36,8 @@
     "resources": {
       "../../resources/pdfium/pdfium.dll": "pdfium.dll"
     },
-    "windows": {
-      "nsis": {
-        "installMode": "perUser",
-        "displayLanguageSelector": false
-      }
+    "nsis": {
+      "installMode": "currentUser"
     }
   }
 }

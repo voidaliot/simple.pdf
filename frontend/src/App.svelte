@@ -25,9 +25,10 @@
 
     listen("files-queued", drainPending).then((u) => unlisteners.push(u));
 
-    // Tauri file-drop events (M7: drag-drop PDFs onto window)
-    listen<string[]>("tauri://file-drop", async (event) => {
-      for (const path of event.payload) {
+    // Tauri 2 drag-drop event (M7: drag-drop PDFs onto window)
+    // Payload in Tauri 2: { paths: string[], position: { x, y } }
+    listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+      for (const path of event.payload.paths) {
         if (path.toLowerCase().endsWith(".pdf")) {
           await openPath(path).catch(console.error);
         }
