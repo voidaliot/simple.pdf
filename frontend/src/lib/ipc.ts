@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+// ── Basic types ────────────────────────────────────────────────────────────────
+
 export interface OpenedDocument {
   id: string;
   path: string;
@@ -18,6 +20,36 @@ export interface AppVersion {
   pdfium_version: string | null;
 }
 
+/** Word-level text span with normalized bounding box ([0,1] relative to page). */
+export interface TextSpan {
+  text: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+// ── Annotation types ──────────────────────────────────────────────────────────
+
+export interface AnnRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface Annotation {
+  index: number;
+  kind: "highlight" | "underline" | "squiggly" | "strikeout" | "text" | "ink" | "widget" | "stamp" | "freetext" | "other";
+  rect: AnnRect;
+  /** RGBA each 0-255 */
+  color: [number, number, number, number];
+  contents: string | null;
+  author: string | null;
+}
+
+// ── Document lifecycle ─────────────────────────────────────────────────────────
+
 export async function appVersion(): Promise<AppVersion> {
   return invoke<AppVersion>("app_version");
 }
@@ -30,16 +62,114 @@ export async function closeDocument(id: string): Promise<void> {
   return invoke("close_document", { id });
 }
 
-export async function getPageSizes(id: string): Promise<PageSize[]> {
-  return invoke<PageSize[]>("get_page_sizes", { id });
-}
-
 export async function pendingOpenFiles(): Promise<string[]> {
   return invoke<string[]>("pending_open_files");
 }
 
+// ── Page data ─────────────────────────────────────────────────────────────────
+
+export async function getPageSizes(id: string): Promise<PageSize[]> {
+  return invoke<PageSize[]>("get_page_sizes", { id });
+}
+
+export async function getPageTextSpans(id: string, pageIndex: number): Promise<TextSpan[]> {
+  return invoke<TextSpan[]>("get_page_text_spans", { id, pageIndex });
+}
+
 /** Build the pdf:// URL for a page image. */
 export function pageUrl(docId: string, pageIndex: number, scale: number): string {
-  const s = scale.toFixed(3);
-  return `pdf://localhost/page/${docId}/${pageIndex}?scale=${s}`;
+  return `pdf://localhost/page/${docId}/${pageIndex}?scale=${scale.toFixed(3)}`;
+}
+
+/** Build the thumb:// URL for a page-0 thumbnail from a file path. */
+export function thumbUrl(filePath: string, maxW = 240): string {
+  return `thumb://localhost/page?path=${encodeURIComponent(filePath)}&maxw=${maxW}`;
+}
+
+// ── Annotations ───────────────────────────────────────────────────────────────
+
+export async function getPageAnnotations(id: string, pageIndex: number): Promise<Annotation[]> {
+  return invoke<Annotation[]>("get_page_annotations", { id, pageIndex });
+}
+
+export async function addHighlightAnnotation(
+  id: string,
+  pageIndex: number,
+  rects: AnnRect[],
+  color: [number, number, number],
+  opacity: number,
+): Promise<number> {
+  return invoke<number>("add_highlight_annotation", { id, pageIndex, rects, color, opacity });
+}
+
+export async function addUnderlineAnnotation(
+  id: string,
+  pageIndex: number,
+  rects: AnnRect[],
+  color: [number, number, number],
+): Promise<number> {
+  return invoke<number>("add_underline_annotation", { id, pageIndex, rects, color });
+}
+
+export async function addStrikeoutAnnotation(
+  id: string,
+  pageIndex: number,
+  rects: AnnRect[],
+  color: [number, number, number],
+): Promise<number> {
+  return invoke<number>("add_strikeout_annotation", { id, pageIndex, rects, color });
+}
+
+export async function addTextAnnotation(
+  id: string,
+  pageIndex: number,
+  left: number,
+  top: number,
+  contents: string,
+  author: string | null,
+  color: [number, number, number],
+): Promise<number> {
+  return invoke<number>("add_text_annotation", { id, pageIndex, left, top, contents, author, color });
+}
+
+export async function addInkAnnotation(
+  id: string,
+  pageIndex: number,
+  paths: [number, number][][],
+  color: [number, number, number],
+  width: number,
+): Promise<number> {
+  return invoke<number>("add_ink_annotation", { id, pageIndex, paths, color, width });
+}
+
+export async function removeAnnotation(
+  id: string,
+  pageIndex: number,
+  annotIndex: number,
+): Promise<void> {
+  return invoke("remove_annotation", { id, pageIndex, annotIndex });
+}
+
+export async function undoAnnotation(id: string): Promise<boolean> {
+  return invoke<boolean>("undo_annotation", { id });
+}
+
+export async function saveDocument(id: string): Promise<void> {
+  return invoke("save_document", { id });
+}
+
+// ── File system ───────────────────────────────────────────────────────────────
+
+export async function listFolderPdfs(path: string): Promise<string[]> {
+  return invoke<string[]>("list_folder_pdfs", { path });
+}
+
+export async function revealInExplorer(path: string): Promise<void> {
+  return invoke("reveal_in_explorer", { path });
+}
+
+// ── Network ───────────────────────────────────────────────────────────────────
+
+export async function downloadUrlToTemp(url: string): Promise<string> {
+  return invoke<string>("download_url_to_temp", { url });
 }

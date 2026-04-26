@@ -1,8 +1,13 @@
 <script lang="ts">
   import { recents, type RecentEntry } from "../stores/recents.svelte";
-  import { pickAndOpen, openPath } from "../lib/open";
+  import { pickAndOpen, pickFolderAndOpen, openFromUrl, openPath } from "../lib/open";
+  import { revealInExplorer } from "../lib/ipc";
 
   let filter = $state("");
+  let pasteUrlOpen = $state(false);
+  let pasteUrlValue = $state("");
+  let pasteUrlError = $state("");
+  let pasteUrlLoading = $state(false);
 
   const sorted = $derived([
     ...recents.entries.filter((e) => e.pinned),
@@ -19,9 +24,7 @@
       : sorted
   );
 
-  let contextMenu = $state<{ x: number; y: number; entry: RecentEntry } | null>(
-    null
-  );
+  let contextMenu = $state<{ x: number; y: number; entry: RecentEntry } | null>(null);
 
   function onContextMenu(e: MouseEvent, entry: RecentEntry) {
     e.preventDefault();
@@ -30,6 +33,26 @@
 
   function closeContext() {
     contextMenu = null;
+  }
+
+  async function openPasteUrl() {
+    if (!pasteUrlValue.trim()) return;
+    pasteUrlLoading = true;
+    pasteUrlError = "";
+    try {
+      await openFromUrl(pasteUrlValue.trim());
+      pasteUrlOpen = false;
+      pasteUrlValue = "";
+    } catch (err: unknown) {
+      pasteUrlError = err instanceof Error ? err.message : String(err);
+    } finally {
+      pasteUrlLoading = false;
+    }
+  }
+
+  function onPasteUrlKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") openPasteUrl();
+    if (e.key === "Escape") { pasteUrlOpen = false; pasteUrlValue = ""; }
   }
 </script>
 
@@ -43,9 +66,31 @@
 
   <div class="actions">
     <button class="primary" onclick={pickAndOpen}>Open file…</button>
-    <button disabled title="Coming soon">Open folder</button>
-    <button disabled title="Coming soon">Paste URL</button>
+    <button onclick={pickFolderAndOpen}>Open folder</button>
+    <button onclick={() => { pasteUrlOpen = true; }}>Paste URL</button>
   </div>
+
+  <!-- Paste URL dialog -->
+  {#if pasteUrlOpen}
+    <div class="url-dialog" role="dialog" aria-label="Open from URL">
+      <input
+        type="url"
+        placeholder="https://example.com/document.pdf"
+        bind:value={pasteUrlValue}
+        onkeydown={onPasteUrlKeydown}
+        aria-label="PDF URL"
+      />
+      {#if pasteUrlError}
+        <p class="url-error">{pasteUrlError}</p>
+      {/if}
+      <div class="url-actions">
+        <button class="primary" onclick={openPasteUrl} disabled={pasteUrlLoading}>
+          {pasteUrlLoading ? "Downloading…" : "Open"}
+        </button>
+        <button onclick={() => { pasteUrlOpen = false; pasteUrlValue = ""; }}>Cancel</button>
+      </div>
+    </div>
+  {/if}
 
   <div class="filter">
     <input
@@ -83,11 +128,14 @@
             oncontextmenu={(e) => onContextMenu(e, entry)}
           >
             <div class="thumb" aria-hidden="true">
+              {#if entry.thumbnail}
+                <img src={entry.thumbnail} alt="" class="thumb-img" />
+              {/if}
               {#if entry.pinned}<span class="pin-badge">pinned</span>{/if}
             </div>
             <div class="meta">
               <h3>{entry.title}</h3>
-              <p>{entry.path}</p>
+              <p class="path-label">{entry.path}</p>
             </div>
           </div>
         {/each}
@@ -96,6 +144,7 @@
   </section>
 </section>
 
+<!-- Context menu -->
 {#if contextMenu}
   <div
     class="context-menu"
@@ -106,22 +155,31 @@
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
   >
-    <button
-      role="menuitem"
-      onclick={() => {
-        recents.togglePin(contextMenu!.entry.path);
-        closeContext();
-      }}
-    >
+    <button role="menuitem"
+      onclick={() => { openPath(contextMenu!.entry.path).catch(console.error); closeContext(); }}>
+      Open
+    </button>
+    <button role="menuitem"
+      onclick={() => { recents.togglePin(contextMenu!.entry.path); closeContext(); }}>
       {contextMenu.entry.pinned ? "Unpin" : "Pin to top"}
     </button>
-    <button
-      role="menuitem"
+    <button role="menuitem"
       onclick={() => {
-        recents.remove(contextMenu!.entry.path);
+        revealInExplorer(contextMenu!.entry.path).catch(console.error);
         closeContext();
-      }}
-    >
+      }}>
+      Reveal in Explorer
+    </button>
+    <button role="menuitem"
+      onclick={() => {
+        navigator.clipboard.writeText(contextMenu!.entry.path).catch(console.error);
+        closeContext();
+      }}>
+      Copy path
+    </button>
+    <div class="sep" aria-hidden="true"></div>
+    <button role="menuitem" class="danger"
+      onclick={() => { recents.remove(contextMenu!.entry.path); closeContext(); }}>
       Remove from recents
     </button>
   </div>
@@ -143,16 +201,8 @@
     letter-spacing: -0.02em;
   }
   .dot { color: var(--accent); }
-  .tagline {
-    color: var(--fg-muted);
-    margin: 8px 0 0;
-    font-size: 15px;
-  }
-  .actions {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 24px;
-  }
+  .tagline { color: var(--fg-muted); margin: 8px 0 0; font-size: 15px; }
+  .actions { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
   .actions button {
     padding: 8px 16px;
     border-radius: var(--radius);
@@ -163,11 +213,44 @@
   }
   .actions button:hover:not(:disabled) { border-color: var(--accent); }
   .actions button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .actions .primary {
-    background: var(--accent);
-    color: var(--accent-fg);
-    border-color: var(--accent);
+  .actions .primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+
+  /* Paste-URL inline dialog */
+  .url-dialog {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    margin-bottom: 16px;
+    max-width: 480px;
   }
+  .url-dialog input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+    font-size: 13px;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+  }
+  .url-dialog input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .url-error { color: var(--danger); font-size: 12px; margin: 0 0 8px; }
+  .url-actions { display: flex; gap: 8px; }
+  .url-actions button {
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+  }
+  .url-actions .primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .url-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
   .filter { margin-bottom: 24px; }
   .filter input {
     width: 100%;
@@ -178,13 +261,10 @@
     background: var(--bg-elev);
     color: var(--fg);
   }
-  .recents .empty {
-    padding: 64px 0;
-    color: var(--fg-muted);
-    text-align: center;
-  }
+  .recents .empty { padding: 64px 0; color: var(--fg-muted); text-align: center; }
   .recents .empty p { margin: 4px 0; }
   .recents .empty .hint { font-size: 13px; opacity: 0.7; }
+
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -200,14 +280,22 @@
     user-select: none;
   }
   .card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .card.pinned { border-color: var(--accent); }
+
   .thumb {
     position: relative;
     aspect-ratio: 3 / 4;
-    background: linear-gradient(180deg, #f3f3f3, #e5e5e5);
+    background: linear-gradient(180deg, var(--bg-chrome), var(--border));
+    overflow: hidden;
   }
-  @media (prefers-color-scheme: dark) {
-    .thumb { background: linear-gradient(180deg, #2a2a2a, #1a1a1a); }
+  .thumb-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
   }
   .pin-badge {
     position: absolute;
@@ -232,7 +320,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .meta p {
+  .path-label {
     margin: 4px 0 0;
     font-size: 11px;
     color: var(--fg-muted);
@@ -240,6 +328,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
   .context-menu {
     position: fixed;
     z-index: 200;
@@ -263,4 +352,6 @@
     color: var(--fg);
   }
   .context-menu button:hover { background: var(--bg-chrome); }
+  .context-menu button.danger { color: var(--danger); }
+  .context-menu .sep { height: 1px; background: var(--border); margin: 4px 0; }
 </style>
