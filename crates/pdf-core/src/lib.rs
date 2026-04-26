@@ -52,6 +52,18 @@ pub struct Document {
     inner: Arc<Mutex<PdfDocument<'static>>>,
 }
 
+// SAFETY: all PDFium access is serialised through the Mutex.
+// pdfium_6721 does not expose Send/Sync on its raw-pointer types,
+// but the pdfium DLL is safe to call from any thread when accesses
+// are mutually exclusive (which our Mutex guarantees).
+unsafe impl Send for Document {}
+unsafe impl Sync for Document {}
+
+// SAFETY: PdfEngine holds Arc<Pdfium>. We never move Pdfium across
+// threads — it is accessed only via Document's locked Mutex.
+unsafe impl Send for PdfEngine {}
+unsafe impl Sync for PdfEngine {}
+
 impl Document {
     pub fn with_doc<R>(&self, f: impl FnOnce(&PdfDocument<'static>) -> R) -> R {
         f(&self.inner.lock())
