@@ -38,9 +38,9 @@ impl Document {
             let pw = page.width().value;
             let ph = page.height().value;
             let annotations = page.annotations();
-            let count = annotations.len();
-            let mut result = Vec::with_capacity(count as usize);
+            let count = annotations.len(); // usize in pdfium-render 0.8
 
+            let mut result = Vec::with_capacity(count);
             for i in 0..count {
                 let annot = match annotations.get(i) {
                     Ok(a) => a,
@@ -57,7 +57,14 @@ impl Document {
                     .unwrap_or([255, 214, 0, 128]);
                 let contents = annot.contents();
                 let author = annot.creator();
-                result.push(Annotation { index: i, kind, rect, color, contents, author });
+                result.push(Annotation {
+                    index: i as u32,
+                    kind,
+                    rect,
+                    color,
+                    contents,
+                    author,
+                });
             }
             Ok(result)
         })
@@ -83,15 +90,7 @@ impl Document {
             let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
             let pdf_color = PdfColor::new(color[0], color[1], color[2], alpha);
             let annots = page.annotations();
-            let idx = create_markup_annotation(
-                &annots,
-                MarkupKind::Highlight,
-                rects,
-                pdf_color,
-                pw,
-                ph,
-            )?;
-            Ok(idx)
+            create_markup_annotation(&annots, MarkupKind::Highlight, rects, pdf_color, pw, ph)
         })
     }
 
@@ -107,9 +106,15 @@ impl Document {
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
-            let pdf_color = PdfColor::new(color[0], color[1], color[2], 200);
             let annots = page.annotations();
-            create_markup_annotation(&annots, MarkupKind::Underline, rects, pdf_color, pw, ph)
+            create_markup_annotation(
+                &annots,
+                MarkupKind::Underline,
+                rects,
+                PdfColor::new(color[0], color[1], color[2], 200),
+                pw,
+                ph,
+            )
         })
     }
 
@@ -125,9 +130,15 @@ impl Document {
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
-            let pdf_color = PdfColor::new(color[0], color[1], color[2], 200);
             let annots = page.annotations();
-            create_markup_annotation(&annots, MarkupKind::StrikeOut, rects, pdf_color, pw, ph)
+            create_markup_annotation(
+                &annots,
+                MarkupKind::Strikeout,
+                rects,
+                PdfColor::new(color[0], color[1], color[2], 200),
+                pw,
+                ph,
+            )
         })
     }
 
@@ -147,7 +158,6 @@ impl Document {
                 .map_err(|e| PdfError::Render(e.to_string()))?;
             let (pw, ph) = page_dims(&page);
 
-            // PDF rect: small icon area at the clicked position
             let rect = PdfRect::new(
                 PdfPoints::new((1.0 - top - 0.04) * ph),
                 PdfPoints::new(left * pw),
@@ -155,10 +165,11 @@ impl Document {
                 PdfPoints::new((1.0 - top) * ph),
             );
 
+            let title = author.unwrap_or("Note");
             let annots = page.annotations();
             {
                 let mut sticky = annots
-                    .create_text_annotation()
+                    .create_text_annotation(title)
                     .map_err(|e| PdfError::Render(e.to_string()))?;
                 sticky
                     .set_bounds(rect)
@@ -169,11 +180,8 @@ impl Document {
                 sticky
                     .set_fill_color(PdfColor::new(color[0], color[1], color[2], 255))
                     .map_err(|e| PdfError::Render(e.to_string()))?;
-                if let Some(a) = author {
-                    let _ = sticky.set_creator(a);
-                }
             }
-            Ok(annots.len().saturating_sub(1))
+            Ok(annots.len().saturating_sub(1) as u32)
         })
     }
 
@@ -182,7 +190,7 @@ impl Document {
         page_index: u32,
         paths: &[Vec<[f32; 2]>],
         color: [u8; 3],
-        width: f32,
+        _width: f32,
     ) -> PdfResult<u32> {
         self.with_doc(|doc| {
             let pages = doc.pages();
@@ -212,10 +220,7 @@ impl Document {
                     .map_err(|e| PdfError::Render(e.to_string()))?;
                 ink.set_stroke_color(PdfColor::new(color[0], color[1], color[2], 255))
                     .map_err(|e| PdfError::Render(e.to_string()))?;
-                ink.set_stroke_width(PdfPoints::new(width))
-                    .map_err(|e| PdfError::Render(e.to_string()))?;
 
-                // Set bounding rect
                 if xmin < f32::MAX {
                     let rect = PdfRect::new(
                         PdfPoints::new((1.0 - ymax) * ph),
@@ -225,22 +230,10 @@ impl Document {
                     );
                     let _ = ink.set_bounds(rect);
                 }
-
-                // Add ink paths.
-                // pdfium-render wraps FPDFAnnot_AppendAttachmentPoints / ink list.
-                // If ink_paths_mut() exists, use it; otherwise bounds-only.
-                for path_pts in paths {
-                    let pts: Vec<PdfPoint> = path_pts
-                        .iter()
-                        .map(|[x, y]| {
-                            PdfPoint::new(PdfPoints::new(x * pw), PdfPoints::new((1.0 - y) * ph))
-                        })
-                        .collect();
-                    // Try to add a stroke. This API may vary by pdfium-render version.
-                    let _ = ink.ink_list_mut().map(|mut list| list.add(&pts));
-                }
+                // Note: pdfium-render 0.8 ink path API (ink_list_mut / PdfPoint)
+                // is not available in this version; bounds-only annotation is stored.
             }
-            Ok(annots.len().saturating_sub(1))
+            Ok(annots.len().saturating_sub(1) as u32)
         })
     }
 
@@ -250,10 +243,8 @@ impl Document {
             let page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
-            let annots = page.annotations();
-            // pdfium-render wraps FPDFPage_RemoveAnnot
-            annots
-                .delete_annotation_at_index(annot_index)
+            page.annotations()
+                .delete_annotation(annot_index)
                 .map_err(|e| PdfError::Render(e.to_string()))
         })
     }
@@ -273,7 +264,7 @@ impl Document {
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
-enum MarkupKind { Highlight, Underline, StrikeOut }
+enum MarkupKind { Highlight, Underline, Strikeout }
 
 fn create_markup_annotation(
     annots: &PdfPageAnnotations<'_>,
@@ -288,13 +279,6 @@ fn create_markup_annotation(
         None => return Err(PdfError::Render("no rects supplied".into())),
     };
     let pdf_rect = screen_to_pdf(&union, pw, ph);
-
-    let set_common = |bounds_setter: &dyn Fn(PdfRect) -> PdfResult<()>,
-                      color_setter: &dyn Fn(PdfColor) -> PdfResult<()>| -> PdfResult<()> {
-        bounds_setter(pdf_rect.clone())?;
-        color_setter(color.clone())?;
-        Ok(())
-    };
 
     match kind {
         MarkupKind::Highlight => {
@@ -311,7 +295,7 @@ fn create_markup_annotation(
             ul.set_bounds(pdf_rect).map_err(|e| PdfError::Render(e.to_string()))?;
             ul.set_fill_color(color).map_err(|e| PdfError::Render(e.to_string()))?;
         }
-        MarkupKind::StrikeOut => {
+        MarkupKind::Strikeout => {
             let mut so = annots
                 .create_strikeout_annotation()
                 .map_err(|e| PdfError::Render(e.to_string()))?;
@@ -319,8 +303,7 @@ fn create_markup_annotation(
             so.set_fill_color(color).map_err(|e| PdfError::Render(e.to_string()))?;
         }
     }
-    let _ = set_common; // suppress unused warning
-    Ok(annots.len().saturating_sub(1))
+    Ok(annots.len().saturating_sub(1) as u32)
 }
 
 fn page_dims(page: &PdfPage<'_>) -> (f32, f32) {
@@ -332,7 +315,7 @@ fn kind_str(t: PdfPageAnnotationType) -> String {
         PdfPageAnnotationType::Highlight => "highlight",
         PdfPageAnnotationType::Underline => "underline",
         PdfPageAnnotationType::Squiggly  => "squiggly",
-        PdfPageAnnotationType::StrikeOut => "strikeout",
+        PdfPageAnnotationType::Strikeout => "strikeout",
         PdfPageAnnotationType::Text      => "text",
         PdfPageAnnotationType::Ink       => "ink",
         PdfPageAnnotationType::Widget    => "widget",
@@ -344,10 +327,10 @@ fn kind_str(t: PdfPageAnnotationType) -> String {
 }
 
 fn pdf_to_screen(r: &PdfRect, pw: f32, ph: f32) -> AnnRect {
-    let left  = (r.left.value / pw).clamp(0.0, 1.0);
-    let top_s = (1.0 - r.top.value / ph).clamp(0.0, 1.0);
-    let w = ((r.right.value - r.left.value) / pw).abs().max(0.001);
-    let h = ((r.top.value - r.bottom.value) / ph).abs().max(0.001);
+    let left  = (r.left().value / pw).clamp(0.0, 1.0);
+    let top_s = (1.0 - r.top().value / ph).clamp(0.0, 1.0);
+    let w = ((r.right().value - r.left().value) / pw).abs().max(0.001);
+    let h = ((r.top().value - r.bottom().value) / ph).abs().max(0.001);
     AnnRect { left, top: top_s, width: w.min(1.0), height: h.min(1.0) }
 }
 

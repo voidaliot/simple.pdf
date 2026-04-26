@@ -3,7 +3,7 @@ pub mod error;
 pub mod render;
 pub mod text;
 
-pub use annotations::{AnnRect, Annotation, NewInkAnnotation, NewMarkupAnnotation, NewTextAnnotation};
+pub use annotations::{AnnRect, Annotation};
 pub use error::{PdfError, PdfResult};
 pub use render::{PageSize, RenderRequest};
 pub use text::TextSpan;

@@ -1,5 +1,4 @@
 use crate::{Document, PdfError, PdfResult};
-use pdfium_render::prelude::*;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TextSpan {
@@ -63,10 +62,10 @@ impl Document {
                     Err(_) => continue,
                 };
 
-                let bl = b.left.value;
-                let br = b.right.value;
-                let bt = b.top.value;
-                let bb = b.bottom.value;
+                let bl = b.left().value;
+                let br = b.right().value;
+                let bt = b.top().value;
+                let bb = b.bottom().value;
 
                 if word.is_empty() {
                     wl = bl;
