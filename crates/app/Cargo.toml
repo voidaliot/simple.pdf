@@ -29,6 +29,11 @@ tauri-plugin-dialog = { workspace = true }
 tauri-plugin-fs = { workspace = true }
 tauri-plugin-os = { workspace = true }
 tauri-plugin-single-instance = { workspace = true }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-http = { workspace = true }
+
+reqwest = { workspace = true }
+urlencoding = { workspace = true }
 
 shared-types = { path = "../shared-types" }
 pdf-core = { path = "../pdf-core" }

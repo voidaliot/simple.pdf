@@ -1,8 +1,12 @@
+pub mod annotations;
 pub mod error;
 pub mod render;
+pub mod text;
 
+pub use annotations::{AnnRect, Annotation, NewInkAnnotation, NewMarkupAnnotation, NewTextAnnotation};
 pub use error::{PdfError, PdfResult};
 pub use render::{PageSize, RenderRequest};
+pub use text::TextSpan;
 
 use parking_lot::Mutex;
 use pdfium_render::prelude::*;

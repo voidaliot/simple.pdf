@@ -1,4 +1,4 @@
-export type TabKind = "home" | "doc";
+export type TabKind = "home" | "doc" | "settings";
 
 export interface Tab {
   id: string;
@@ -27,12 +27,18 @@ function createTabsStore() {
     return tab;
   }
 
+  function openSettings(): Tab {
+    const existing = list.find((t) => t.kind === "settings");
+    if (existing) { activeId = existing.id; return existing; }
+    const tab: Tab = { id: genId(), kind: "settings", title: "Settings", dirty: false };
+    list = [...list, tab];
+    activeId = tab.id;
+    return tab;
+  }
+
   function openDoc(info: { id: string; path: string; title: string; pageCount: number }): Tab {
     const existing = list.find((t) => t.path === info.path);
-    if (existing) {
-      activeId = existing.id;
-      return existing;
-    }
+    if (existing) { activeId = existing.id; return existing; }
     const tab: Tab = {
       id: genId(),
       kind: "doc",
@@ -75,15 +81,21 @@ function createTabsStore() {
     list = copy;
   }
 
+  function markDirty(id: string, dirty: boolean) {
+    list = list.map((t) => t.id === id ? { ...t, dirty } : t);
+  }
+
   return {
     get list() { return list; },
     get activeId() { return activeId; },
     get active() { return active; },
     openHome,
+    openSettings,
     openDoc,
     close,
     activate,
     reorder,
+    markDirty,
   };
 }
 

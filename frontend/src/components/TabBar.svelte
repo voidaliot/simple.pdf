@@ -76,7 +76,10 @@
     {/each}
     <button class="new-tab" aria-label="New tab" onclick={() => tabs.openHome()}>+</button>
   </div>
-  <div class="drag-region" data-tauri-drag-region></div>
+  <div class="drag-region" data-tauri-drag-region>
+    <button class="settings-btn" aria-label="Settings" title="Settings"
+      onclick={() => tabs.openSettings()}>⚙</button>
+  </div>
 </div>
 
 <style>
@@ -158,5 +161,10 @@
     margin-bottom: 4px;
   }
   .new-tab:hover { background: rgba(127,127,127,0.15); color: var(--fg); }
-  .drag-region { flex: 1; align-self: stretch; }
+  .drag-region { flex: 1; align-self: stretch; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; }
+  .settings-btn {
+    background: transparent; border: none; font-size: 16px; color: var(--fg-muted);
+    cursor: pointer; padding: 4px; border-radius: var(--radius); line-height: 1;
+  }
+  .settings-btn:hover { color: var(--fg); background: rgba(127,127,127,0.15); }
 </style>

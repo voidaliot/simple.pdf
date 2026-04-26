@@ -11,6 +11,7 @@ thiserror = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
+uuid = { workspace = true }
 image = { workspace = true }
 pdfium-render = { workspace = true }
 shared-types = { path = "../shared-types" }

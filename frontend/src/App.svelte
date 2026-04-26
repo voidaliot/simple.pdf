@@ -4,9 +4,12 @@
   import TabBar from "./components/TabBar.svelte";
   import Home from "./routes/Home.svelte";
   import Viewer from "./routes/Viewer.svelte";
+  import Settings from "./routes/Settings.svelte";
   import { tabs } from "./stores/tabs.svelte";
   import { pendingOpenFiles } from "./lib/ipc";
   import { pickAndOpen, openPath } from "./lib/open";
+  // Import theme store to run its init side-effect
+  import "./stores/theme.svelte";
 
   async function drainPending() {
     const files = await pendingOpenFiles();
@@ -17,36 +20,44 @@
 
   onMount(() => {
     drainPending();
-    let unlisten: (() => void) | undefined;
-    listen("files-queued", drainPending).then((u) => {
-      unlisten = u;
-    });
-    return () => {
-      unlisten?.();
-    };
+
+    const unlisteners: (() => void)[] = [];
+
+    listen("files-queued", drainPending).then((u) => unlisteners.push(u));
+
+    // Tauri file-drop events (M7: drag-drop PDFs onto window)
+    listen<string[]>("tauri://file-drop", async (event) => {
+      for (const path of event.payload) {
+        if (path.toLowerCase().endsWith(".pdf")) {
+          await openPath(path).catch(console.error);
+        }
+      }
+    }).then((u) => unlisteners.push(u));
+
+    return () => { for (const u of unlisteners) u(); };
   });
 
   function onKeyDown(e: KeyboardEvent) {
     if (!e.ctrlKey) return;
     switch (e.key) {
-      case "t":
+      case "t": e.preventDefault(); tabs.openHome(); break;
+      case "w": {
         e.preventDefault();
-        tabs.openHome();
-        break;
-      case "w":
-        e.preventDefault();
+        const active = tabs.active;
+        // FR-TAB-02: confirm close if tab is dirty
+        if (active?.dirty) {
+          const choice = confirm(`"${active.title}" has unsaved changes.\nDiscard changes and close?`);
+          if (!choice) break;
+        }
         tabs.close(tabs.activeId);
         break;
-      case "o":
-        e.preventDefault();
-        pickAndOpen();
-        break;
+      }
+      case "o": e.preventDefault(); pickAndOpen(); break;
       case "Tab": {
         e.preventDefault();
         const list = tabs.list;
         const idx = list.findIndex((t) => t.id === tabs.activeId);
-        const next =
-          list[(idx + (e.shiftKey ? -1 : 1) + list.length) % list.length];
+        const next = list[(idx + (e.shiftKey ? -1 : 1) + list.length) % list.length];
         if (next) tabs.activate(next.id);
         break;
       }
@@ -62,6 +73,8 @@
     {#if tabs.active}
       {#if tabs.active.kind === "home"}
         <Home />
+      {:else if tabs.active.kind === "settings"}
+        <Settings />
       {:else}
         <Viewer tab={tabs.active} />
       {/if}
@@ -70,15 +83,6 @@
 </div>
 
 <style>
-  .shell {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--bg);
-  }
-  .content {
-    flex: 1;
-    overflow: hidden;
-    background: var(--bg);
-  }
+  .shell { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
+  .content { flex: 1; overflow: hidden; background: var(--bg); }
 </style>
