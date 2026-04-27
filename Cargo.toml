@@ -39,6 +39,7 @@ tauri-plugin-http = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 urlencoding = "2"
 base64 = "0.22"
+lru = "0.12"
 
 pdfium-render = { version = "0.8", default-features = false, features = ["image", "thread_safe", "pdfium_6721"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

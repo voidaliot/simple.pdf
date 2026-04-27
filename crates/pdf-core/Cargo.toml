@@ -13,6 +13,7 @@ tracing = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
 image = { workspace = true }
+lru = { workspace = true }
 pdfium-render = { workspace = true }
 shared-types = { path = "../shared-types" }
 

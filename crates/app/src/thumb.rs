@@ -11,7 +11,7 @@ pub fn handle_thumb_request<R: Runtime>(
     match render(app, &request) {
         Ok(png) => Response::builder()
             .status(200)
-            .header("Content-Type", "image/png")
+            .header("Content-Type", "image/jpeg")
             .header("Access-Control-Allow-Origin", "*")
             .header("Cache-Control", "private, max-age=86400")
             .body(png)
@@ -55,6 +55,6 @@ fn render<R: Runtime>(
     let sizes = doc.page_sizes().map_err(|e| e.to_string())?;
     let page_w = sizes.first().map(|s| s.width).unwrap_or(612.0);
     let scale = (max_w / page_w).min(1.0).max(0.05);
-    doc.render_page_png(RenderRequest { page_index: 0, scale })
+    doc.render_page_jpeg(RenderRequest { page_index: 0, scale })
         .map_err(|e| e.to_string())
 }

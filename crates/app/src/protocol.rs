@@ -11,7 +11,7 @@ pub fn handle_pdf_request<R: Runtime>(
     match render(app, &request) {
         Ok(png) => Response::builder()
             .status(200)
-            .header("Content-Type", "image/png")
+            .header("Content-Type", "image/jpeg")
             .header("Access-Control-Allow-Origin", "*")
             .header("Cache-Control", "private, max-age=3600")
             .body(png)
@@ -56,6 +56,6 @@ fn render<R: Runtime>(
         let map = state.docs.lock();
         map.get(&doc_id).cloned().ok_or_else(|| format!("unknown doc {doc_id}"))?
     };
-    doc.render_page_png(RenderRequest { page_index, scale })
+    doc.render_page_jpeg(RenderRequest { page_index, scale })
         .map_err(|e| e.to_string())
 }

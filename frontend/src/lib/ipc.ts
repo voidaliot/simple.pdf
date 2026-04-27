@@ -86,7 +86,7 @@ export async function renderPageB64(
   scale: number,
 ): Promise<string> {
   const b64 = await invoke<string>("render_page_b64", { id: docId, pageIndex, scale });
-  return `data:image/png;base64,${b64}`;
+  return `data:image/jpeg;base64,${b64}`;
 }
 
 /**
@@ -95,7 +95,7 @@ export async function renderPageB64(
  */
 export async function renderThumbB64(filePath: string, maxW = 240): Promise<string> {
   const b64 = await invoke<string>("render_thumb_b64", { path: filePath, maxW });
-  return `data:image/png;base64,${b64}`;
+  return `data:image/jpeg;base64,${b64}`;
 }
 
 // ── Forms ─────────────────────────────────────────────────────────────────────
