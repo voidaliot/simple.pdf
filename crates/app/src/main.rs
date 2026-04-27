@@ -42,6 +42,9 @@ fn main() {
             commands::open_document,
             commands::close_document,
             commands::pending_open_files,
+            // page rendering (IPC-based, works in dev + prod)
+            commands::render_page_b64,
+            commands::render_thumb_b64,
             // page data
             commands::get_page_sizes,
             commands::get_page_text_spans,

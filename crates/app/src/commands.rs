@@ -61,6 +61,42 @@ pub fn pending_open_files(state: State<AppState>) -> Vec<String> {
         .collect()
 }
 
+// ── Page rendering (IPC) ──────────────────────────────────────────────────────
+
+/// Render one page to a base64-encoded PNG and return it as a data URL.
+/// Used instead of the `pdf://` custom scheme, which WebView2 blocks when
+/// the frontend is served from an HTTP dev URL.
+#[tauri::command]
+pub fn render_page_b64(
+    id: String,
+    page_index: u32,
+    scale: f32,
+    state: State<AppState>,
+) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = with_doc(&id, &state, |doc| {
+        doc.render_page_png(pdf_core::RenderRequest { page_index, scale })
+            .map_err(|e| e.to_string())
+    })?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// Render page 0 of an on-disk PDF at thumbnail size, returned as a data URL.
+/// Replaces the `thumb://` custom scheme for the same reason as above.
+#[tauri::command]
+pub fn render_thumb_b64(path: String, max_w: f32, state: State<AppState>) -> Result<String, String> {
+    use base64::Engine;
+    let p = std::path::Path::new(&path);
+    let doc = state.engine.open(p).map_err(|e| e.to_string())?;
+    let sizes = doc.page_sizes().map_err(|e| e.to_string())?;
+    let page_w = sizes.first().map(|s| s.width).unwrap_or(612.0);
+    let scale = (max_w / page_w).clamp(0.05, 1.0);
+    let bytes = doc
+        .render_page_png(pdf_core::RenderRequest { page_index: 0, scale })
+        .map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 // ── Page data ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]

@@ -76,14 +76,26 @@ export async function getPageTextSpans(id: string, pageIndex: number): Promise<T
   return invoke<TextSpan[]>("get_page_text_spans", { id, pageIndex });
 }
 
-/** Build the pdf:// URL for a page image. */
-export function pageUrl(docId: string, pageIndex: number, scale: number): string {
-  return `pdf://localhost/page/${docId}/${pageIndex}?scale=${scale.toFixed(3)}`;
+/**
+ * Render a page to a PNG and return it as a base64 data URL.
+ * Uses IPC instead of a custom URI scheme so it works in both dev and prod.
+ */
+export async function renderPageB64(
+  docId: string,
+  pageIndex: number,
+  scale: number,
+): Promise<string> {
+  const b64 = await invoke<string>("render_page_b64", { id: docId, pageIndex, scale });
+  return `data:image/png;base64,${b64}`;
 }
 
-/** Build the thumb:// URL for a page-0 thumbnail from a file path. */
-export function thumbUrl(filePath: string, maxW = 240): string {
-  return `thumb://localhost/page?path=${encodeURIComponent(filePath)}&maxw=${maxW}`;
+/**
+ * Render page 0 of an on-disk PDF at thumbnail size, returned as a data URL.
+ * Uses IPC instead of the thumb:// custom scheme.
+ */
+export async function renderThumbB64(filePath: string, maxW = 240): Promise<string> {
+  const b64 = await invoke<string>("render_thumb_b64", { path: filePath, maxW });
+  return `data:image/png;base64,${b64}`;
 }
 
 // ── Forms ─────────────────────────────────────────────────────────────────────

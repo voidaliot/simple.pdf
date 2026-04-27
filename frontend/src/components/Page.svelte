@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { pageUrl, type TextSpan, type Annotation, type AnnRect, type FormField } from "../lib/ipc";
+  import { renderPageB64, type TextSpan, type Annotation, type AnnRect, type FormField } from "../lib/ipc";
 
   export interface Highlight {
     left: number;
@@ -61,32 +61,46 @@
   const innerTop = $derived(Math.round((displayH - cssH) / 2));
   const innerLeft = $derived(Math.round((displayW - cssW) / 2));
 
-  const src = $derived(visible ? pageUrl(docId, pageIndex, renderScale) : "");
-
-  let loaded = $state(false);
-  let error = $state(false);
-  let errorText = $state("");
+  // IPC-based image loading — avoids pdf:// custom scheme which WebView2
+  // blocks when the frontend is served from the HTTP dev server.
+  type ImgState = "idle" | "loading" | "loaded" | "error";
+  let imgState = $state<ImgState>("idle");
+  let imgSrc = $state("");
+  let imgError = $state("");
 
   $effect(() => {
-    if (src) {
-      loaded = false;
-      error = false;
-      errorText = "";
+    if (!visible) {
+      imgState = "idle";
+      imgSrc = "";
+      imgError = "";
+      return;
     }
-  });
 
-  async function onImgError() {
-    error = true;
-    // Fetch the URL to retrieve the actual server-side error message.
-    if (src) {
-      try {
-        const resp = await fetch(src);
-        errorText = await resp.text();
-      } catch (e) {
-        errorText = String(e);
-      }
-    }
-  }
+    // Capture reactive inputs before the async gap.
+    const id = docId;
+    const idx = pageIndex;
+    const scale = renderScale;
+
+    imgState = "loading";
+    imgError = "";
+    let cancelled = false;
+
+    renderPageB64(id, idx, scale)
+      .then((dataUrl) => {
+        if (!cancelled) {
+          imgSrc = dataUrl;
+          imgState = "loaded";
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          imgError = String(e);
+          imgState = "error";
+        }
+      });
+
+    return () => { cancelled = true; };
+  });
 
   // ── Ink drawing ─────────────────────────────────────────────────────────────
   let inkDrawing = $state(false);
@@ -211,20 +225,16 @@
     style:transform="rotate({rotation}deg)"
   >
     <!-- Page image -->
-    {#if visible && src}
-      <img {src} alt="Page {pageIndex + 1}" width={cssW} height={cssH} draggable="false"
-        onload={() => { loaded = true; }} onerror={onImgError} />
-      {#if !loaded && !error}
-        <div class="skeleton" aria-hidden="true"></div>
-      {/if}
-      {#if error}
-        <div class="error-overlay" title={errorText}>
-          <span>⚠ render failed</span>
-          {#if errorText}
-            <small class="error-detail">{errorText.slice(0, 120)}</small>
-          {/if}
-        </div>
-      {/if}
+    {#if imgState === "loaded"}
+      <img src={imgSrc} alt="Page {pageIndex + 1}" width={cssW} height={cssH}
+        draggable="false" />
+    {:else if imgState === "error"}
+      <div class="error-overlay" title={imgError}>
+        <span>⚠ render failed</span>
+        {#if imgError}
+          <small class="error-detail">{imgError.slice(0, 120)}</small>
+        {/if}
+      </div>
     {:else}
       <div class="skeleton" aria-hidden="true"></div>
     {/if}
