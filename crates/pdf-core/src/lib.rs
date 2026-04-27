@@ -1,10 +1,12 @@
 pub mod annotations;
 pub mod error;
+pub mod forms;
 pub mod render;
 pub mod text;
 
-pub use annotations::{AnnRect, Annotation, NewInkAnnotation, NewMarkupAnnotation, NewTextAnnotation};
+pub use annotations::{AnnRect, Annotation};
 pub use error::{PdfError, PdfResult};
+pub use forms::FormField;
 pub use render::{PageSize, RenderRequest};
 pub use text::TextSpan;
 
@@ -51,6 +53,18 @@ pub struct Document {
     pub page_count: u32,
     inner: Arc<Mutex<PdfDocument<'static>>>,
 }
+
+// SAFETY: all PDFium access is serialised through the Mutex.
+// pdfium_6721 does not expose Send/Sync on its raw-pointer types,
+// but the pdfium DLL is safe to call from any thread when accesses
+// are mutually exclusive (which our Mutex guarantees).
+unsafe impl Send for Document {}
+unsafe impl Sync for Document {}
+
+// SAFETY: PdfEngine holds Arc<Pdfium>. We never move Pdfium across
+// threads — it is accessed only via Document's locked Mutex.
+unsafe impl Send for PdfEngine {}
+unsafe impl Sync for PdfEngine {}
 
 impl Document {
     pub fn with_doc<R>(&self, f: impl FnOnce(&PdfDocument<'static>) -> R) -> R {

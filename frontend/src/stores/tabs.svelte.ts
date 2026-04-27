@@ -13,11 +13,15 @@ export interface Tab {
 let nextId = 1;
 const genId = () => `t${nextId++}`;
 
+// Pre-compute the initial tab id so activeId doesn't read a $state during
+// its own initializer (avoids the state_referenced_locally Svelte warning).
+const _initialTabId = genId();
+
 function createTabsStore() {
   let list = $state<Tab[]>([
-    { id: genId(), kind: "home", title: "New Tab", dirty: false },
+    { id: _initialTabId, kind: "home", title: "New Tab", dirty: false },
   ]);
-  let activeId = $state<string>(list[0]!.id);
+  let activeId = $state<string>(_initialTabId);
   const active = $derived(list.find((t) => t.id === activeId) ?? null);
 
   function openHome(): Tab {

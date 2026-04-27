@@ -24,6 +24,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 ts-rs = { version = "10", features = ["serde-compat", "uuid-impl"] }
 
 tauri = { version = "2", features = [] }
@@ -37,8 +38,9 @@ tauri-plugin-http = "2"
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 urlencoding = "2"
+base64 = "0.22"
 
-pdfium-render = { version = "0.8", features = ["image", "thread_safe"] }
+pdfium-render = { version = "0.8", default-features = false, features = ["image", "thread_safe", "pdfium_6721"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
 [profile.release]

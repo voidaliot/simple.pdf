@@ -28,7 +28,7 @@ This file tracks implementation progress against the requirements in [requiremen
 - [x] Zoom: fit-width / fit-page / custom % / Ctrl+Wheel (FR-VIEW-05, UX-ZOOM-01)
 - [x] Toolbar: page-number input, zoom controls, doc title
 - [x] Skeleton shimmer while page loads; error overlay on render failure
-- [ ] First-run smoke test: `cargo tauri dev` → open a PDF → pages render correctly
+- [x] First-run smoke test: `cargo tauri dev` → open a PDF → pages render correctly
 - [x] Text layer overlay for selection and copy (FR-VIEW-03)
 - [x] Find-in-page (Ctrl+F) with next/prev and highlight-all (FR-VIEW-04)
 - [x] Rotate view 90° / 180° / 270° (FR-VIEW-06)
@@ -68,39 +68,39 @@ This file tracks implementation progress against the requirements in [requiremen
 - [x] Delete annotations — double-click or Delete key (FR-ANN-06)
 - [x] Undo Ctrl+Z — per-doc added-annotation stack (FR-ANN-07)
 - [x] Save via temp file + atomic rename Ctrl+S (SEC-SAVE-01)
-- [ ] All written annotations include appearance stream (FPDFAnnot_SetAP) — pending
+- [~] All written annotations include appearance stream (FPDFAnnot_SetAP) — deferred: not in pdfium-render 0.8.37 bindings; needs ffi.rs + libloading
 
 ### M5 — Forms (AcroForms)
 
-- [ ] Enumerate form fields (text / check / radio / combo / list) (FR-FORM-01)
-- [ ] Overlay positioned HTML inputs matching field geometry
-- [ ] Write values back + regenerate appearances (FR-FORM-02)
-- [ ] Detect `/XFA` and show warning banner (FR-FORM-03)
+- [x] Enumerate form fields (text / check / radio / combo / list) (FR-FORM-01)
+- [x] Overlay positioned HTML inputs matching field geometry
+- [x] Write values back (text + checkbox); AP regen deferred with AP stream task (FR-FORM-02)
+- [x] Detect `/XFA` and show warning banner (FR-FORM-03)
 - [ ] Form reset support where PDF provides it (FR-FORM-04)
 
 ### M6 — Signing [~]
 
 - [x] Signature capture modal — canvas drawing (FR-SIGN-01)
 - [x] Place signature as ink annotation on current page (FR-SIGN-02)
-- [ ] Manage saved signatures — list / set default / delete (FR-SIGN-03)
+- [x] Manage saved signatures — list / set default / delete (FR-SIGN-03)
 
 ### M7 — Integration [~]
 
 - [x] CLI arg handling: `simple.pdf.exe file.pdf` opens file
 - [x] `tauri-plugin-single-instance` forwards second-launch args to running window
 - [x] Drag-drop PDFs onto window (`tauri://file-drop` listener)
-- [ ] Optional per-user `.pdf` association, HKCU only (DIST-ASSOC-01)
+- [x] Optional per-user `.pdf` association, HKCU only (DIST-ASSOC-01)
 
 ### M8 — Polish & Packaging [~]
 
 - [x] Theme: auto-follow OS + manual override via `data-theme` + localStorage (UX-THEME-01)
 - [x] Settings page: theme selector (FR-TAB-01, expandable)
 - [x] Visible focus ring (:focus-visible CSS) + ARIA labels throughout (UX-A11Y-01)
-- [ ] Portable zip build pipeline (exe + pdfium.dll + icons) (DIST-PORT-01)
-- [ ] NSIS installer build pipeline (DIST-INST-01)
-- [ ] WebView2 missing-runtime detection + install link (DIST-WV2-01)
+- [x] Portable zip build pipeline (exe + pdfium.dll + icons) (DIST-PORT-01)
+- [x] NSIS installer build pipeline (DIST-INST-01)
+- [x] WebView2 missing-runtime detection + install link (DIST-WV2-01)
 - [ ] Perf pass: meet NFR-PERF-01, NFR-PERF-02, NFR-SIZE-01, NFR-MEM-01
-- [ ] Local-only crash reporter (SEC-LOG-01)
+- [x] Local-only crash reporter (SEC-LOG-01)
 
 ---
 
@@ -129,3 +129,5 @@ Each of these must pass before v1 is declared done. See `requirements.md` for pe
 - 2026-04-25 — M2 batch: recents store (localStorage), `lib/open.ts` shared utility, keyboard shortcuts (Ctrl+T/W/Tab/O), pending-files drain on startup, Home recents grid with filter + pin/unpin context menu, drag-to-reorder tabs. Dev workflow fixed: `pnpm dev` from repo root via `package.json` shim.
 - 2026-04-25 — M1 completion: text layer overlay (`get_page_text_spans` IPC + transparent word-level spans in Page.svelte), find-in-page bar (Ctrl+F, Enter/Shift+Enter next/prev, match counter, highlight overlays), rotation 90°/180°/270° (CSS transform with axis-swapping wrapper, fit-width adapts to rotated dims). svelte-check 0 errors.
 - 2026-04-25 — M2–M8 batch: thumbnails (`thumb://` protocol + data-URL cache), open folder, paste URL (reqwest), reveal-in-explorer + copy-path, dirty-tab confirm dialog. M3–M4 annotations: read/render existing annotations, write highlight/underline/strikeout/sticky/ink, delete, Ctrl+Z undo, Ctrl+S atomic save. M6 signature canvas. M7 drag-drop. M8 theme store + Settings page + ARIA labels. Deps: tauri-plugin-shell, tauri-plugin-http, reqwest, urlencoding. svelte-check 0 errors 0 warnings.
+- 2026-04-26 — M1 smoke test fixed: build.rs now copies pdfium.dll to target/{triple}/{profile}/ so cargo tauri dev works without manual DLL placement. M5 AcroForms: backend get_form_fields/set_field_text_value/set_field_checked commands (pdfium-render form API), frontend form-layer overlay in Page.svelte (text/multiline/checkbox/radio/combo/list inputs), XFA warning banner in Viewer.svelte. M6 signatures management: signatures.svelte.ts store (localStorage), SignatureCapture redesigned with Draw/Saved tabs, thumbnail preview, set-default star, delete. M7 file association: winreg HKCU write/delete for SimplePDF.Document ProgID, Settings.svelte toggle. M4 AP streams deferred: FPDFAnnot_GenerateAP absent from pdfium-render 0.8.37 bindings — needs ffi.rs + libloading (tracked as in-progress). 0 Rust errors, 0 svelte-check errors.
+- 2026-04-27 — M8 distribution & crash logging: WebView2 detection in main.rs (winreg HKLM/HKCU check before Tauri init, mshta dialog + download link on failure); file-based logging via tracing-appender rolling::never to app_data_dir()/logs/simple-pdf.log; panic hook writes crash.txt to same dir; app_data_dir() implements portable.txt sentinel (./data/ vs %APPDATA%\simple.pdf); scripts/build-portable.ps1 (cargo tauri build --no-bundle → dist/portable/ zip); scripts/build-installer.ps1 (cargo tauri build --bundles nsis). M5 form overlay checkbox corrected (was already implemented in Page.svelte).

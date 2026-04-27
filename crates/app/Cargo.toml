@@ -23,6 +23,7 @@ uuid = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 tauri = { workspace = true, features = ["devtools"] }
 tauri-plugin-dialog = { workspace = true }
@@ -34,6 +35,10 @@ tauri-plugin-http = { workspace = true }
 
 reqwest = { workspace = true }
 urlencoding = { workspace = true }
+base64 = { workspace = true }
 
 shared-types = { path = "../shared-types" }
 pdf-core = { path = "../pdf-core" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.52"

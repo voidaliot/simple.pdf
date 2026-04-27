@@ -16,8 +16,8 @@ function createThemeStore() {
     }
   }
 
-  // Apply on load
-  apply(choice);
+  // Apply on load — read from storage directly to avoid state_referenced_locally warning
+  apply((localStorage.getItem(KEY) as ThemeChoice | null) ?? "system");
 
   function set(c: ThemeChoice) {
     choice = c;

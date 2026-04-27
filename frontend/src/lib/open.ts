@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { openDocument, listFolderPdfs, downloadUrlToTemp, thumbUrl } from "./ipc";
+import { openDocument, listFolderPdfs, downloadUrlToTemp, renderThumbB64 } from "./ipc";
 import { tabs } from "../stores/tabs.svelte";
 import { recents } from "../stores/recents.svelte";
 
@@ -40,24 +40,13 @@ export async function openPath(path: string): Promise<void> {
   cacheThumbnail(doc.path);
 }
 
-/** Fetch the thumbnail image and store it as a data URL in the recents store. */
+/** Render page 0 as a thumbnail and store the data URL in the recents store. */
 async function cacheThumbnail(path: string): Promise<void> {
-  // Only cache if no thumbnail yet
   const existing = recents.entries.find((e) => e.path === path);
   if (existing?.thumbnail) return;
-
   try {
-    const url = thumbUrl(path, 240);
-    const resp = await fetch(url);
-    if (!resp.ok) return;
-    const blob = await resp.blob();
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === "string") {
-        recents.setThumbnail(path, reader.result);
-      }
-    };
-    reader.readAsDataURL(blob);
+    const dataUrl = await renderThumbB64(path, 240);
+    recents.setThumbnail(path, dataUrl);
   } catch {
     // thumbnail failure is non-fatal
   }

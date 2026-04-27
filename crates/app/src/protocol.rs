@@ -1,29 +1,37 @@
 use crate::state::AppState;
 use pdf_core::RenderRequest;
-use tauri::{AppHandle, Manager};
+use tauri::{Manager, Runtime, UriSchemeContext};
 use tauri::http::{Request, Response};
 
-pub fn handle_pdf_request(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+pub fn handle_pdf_request<R: Runtime>(
+    ctx: UriSchemeContext<'_, R>,
+    request: Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    let app = ctx.app_handle();
     match render(app, &request) {
         Ok(png) => Response::builder()
             .status(200)
             .header("Content-Type", "image/png")
+            .header("Access-Control-Allow-Origin", "*")
             .header("Cache-Control", "private, max-age=3600")
             .body(png)
             .unwrap(),
         Err(e) => {
-            tracing::warn!("pdf:// render error: {e}");
+            tracing::warn!("pdf:// render error for {}: {e}", request.uri());
             Response::builder()
                 .status(500)
                 .header("Content-Type", "text/plain")
-                .body(e.to_string().into_bytes())
+                .header("Access-Control-Allow-Origin", "*")
+                .body(e.into_bytes())
                 .unwrap()
         }
     }
 }
 
-fn render(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Vec<u8>, String> {
-    // URL format: pdf://localhost/page/{docId}/{pageIndex}?scale={scale}
+fn render<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    request: &Request<Vec<u8>>,
+) -> Result<Vec<u8>, String> {
     let uri = request.uri();
     let path = uri.path();
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
@@ -46,11 +54,8 @@ fn render(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Vec<u8>, String
     let state = app.state::<AppState>();
     let doc = {
         let map = state.docs.lock();
-        map.get(&doc_id)
-            .cloned()
-            .ok_or_else(|| format!("unknown doc {doc_id}"))?
+        map.get(&doc_id).cloned().ok_or_else(|| format!("unknown doc {doc_id}"))?
     };
-
     doc.render_page_png(RenderRequest { page_index, scale })
         .map_err(|e| e.to_string())
 }

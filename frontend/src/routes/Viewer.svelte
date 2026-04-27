@@ -15,9 +15,14 @@
     removeAnnotation,
     undoAnnotation,
     saveDocument,
+    getFormType,
+    getFormFields,
+    setFieldTextValue,
+    setFieldChecked,
     type TextSpan,
     type Annotation,
     type AnnRect,
+    type FormField,
   } from "../lib/ipc";
   import Page, { type Highlight } from "../components/Page.svelte";
   import SignatureCapture from "../components/SignatureCapture.svelte";
@@ -43,6 +48,33 @@
   }
 
   $effect(() => { for (const idx of visibleSet) loadTextSpans(idx); });
+
+  // ── Forms ────────────────────────────────────────────────────────────────────
+  let formType = $state("none");
+  let formFieldsByPage = $state<(FormField[] | undefined)[]>([]);
+
+  onMount(async () => {
+    try { formType = await getFormType(docId); } catch { formType = "none"; }
+  });
+
+  async function loadFormFields(pageIndex: number) {
+    if (formType === "none" || formFieldsByPage[pageIndex] !== undefined) return;
+    formFieldsByPage[pageIndex] = [];
+    try { formFieldsByPage[pageIndex] = await getFormFields(docId, pageIndex); }
+    catch { formFieldsByPage[pageIndex] = []; }
+  }
+
+  $effect(() => { for (const idx of visibleSet) loadFormFields(idx); });
+
+  async function handleFieldText(pageIndex: number, annotIndex: number, value: string) {
+    await setFieldTextValue(docId, pageIndex, annotIndex, value).catch(console.error);
+    tabs.markDirty(tab.id, true);
+  }
+
+  async function handleFieldChecked(pageIndex: number, annotIndex: number, checked: boolean) {
+    await setFieldChecked(docId, pageIndex, annotIndex, checked).catch(console.error);
+    tabs.markDirty(tab.id, true);
+  }
 
   // ── Annotations ─────────────────────────────────────────────────────────────
   let annotsByPage = $state<(Annotation[] | undefined)[]>([]);
@@ -361,6 +393,13 @@
     </div>
   </div>
 
+  <!-- ── XFA warning ── -->
+  {#if formType === "xfa_full" || formType === "xfa_foreground"}
+    <div class="xfa-banner" role="alert">
+      ⚠ This PDF uses XFA forms, which are not supported. Fields are displayed read-only.
+    </div>
+  {/if}
+
   <!-- ── Find bar ── -->
   {#if findOpen}
     <div class="find-bar" role="search">
@@ -402,11 +441,15 @@
                 highlights={pageHighlights.get(i)}
                 activeHighlight={activeByPage.get(i) ?? -1}
                 annotations={annotsByPage[i]}
+                formFields={formFieldsByPage[i]}
+                xfaReadOnly={formType === "xfa_full" || formType === "xfa_foreground"}
                 activeTool={activeTool}
                 onPageClick={(e, el, cw, ch) => handlePageClick(e, i, el, cw, ch)}
                 onTextSelected={(rects) => handleTextSelection(i, rects)}
                 onInkStroke={(paths) => handleInkStroke(i, paths)}
                 onDeleteAnnotation={(idx) => handleDeleteAnnotation(i, idx)}
+                onFieldText={(annotIdx, val) => handleFieldText(i, annotIdx, val)}
+                onFieldChecked={(annotIdx, val) => handleFieldChecked(i, annotIdx, val)}
                 inkColor={toolColor}
                 inkWidth={inkWidth}
               />
@@ -505,6 +548,12 @@
   .color-pick {
     width: 24px; height: 24px; border: 1px solid var(--border); border-radius: var(--radius);
     padding: 1px; cursor: pointer; background: none; flex-shrink: 0;
+  }
+
+  /* XFA warning */
+  .xfa-banner {
+    padding: 6px 16px; font-size: 12px; flex-shrink: 0;
+    background: #fff3cd; color: #664d03; border-bottom: 1px solid #ffc107;
   }
 
   /* Find bar */
