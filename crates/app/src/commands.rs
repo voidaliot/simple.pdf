@@ -63,7 +63,7 @@ pub fn pending_open_files(state: State<AppState>) -> Vec<String> {
 
 // ── Page rendering (IPC) ──────────────────────────────────────────────────────
 
-/// Render one page to a base64-encoded PNG and return it as a data URL.
+/// Render one page to a base64-encoded JPEG and return it as a data URL.
 /// Used instead of the `pdf://` custom scheme, which WebView2 blocks when
 /// the frontend is served from an HTTP dev URL.
 #[tauri::command]
@@ -75,7 +75,7 @@ pub fn render_page_b64(
 ) -> Result<String, String> {
     use base64::Engine;
     let bytes = with_doc(&id, &state, |doc| {
-        doc.render_page_png(pdf_core::RenderRequest { page_index, scale })
+        doc.render_page_jpeg(pdf_core::RenderRequest { page_index, scale })
             .map_err(|e| e.to_string())
     })?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
@@ -92,7 +92,7 @@ pub fn render_thumb_b64(path: String, max_w: f32, state: State<AppState>) -> Res
     let page_w = sizes.first().map(|s| s.width).unwrap_or(612.0);
     let scale = (max_w / page_w).clamp(0.05, 1.0);
     let bytes = doc
-        .render_page_png(pdf_core::RenderRequest { page_index: 0, scale })
+        .render_page_jpeg(pdf_core::RenderRequest { page_index: 0, scale })
         .map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
@@ -142,6 +142,7 @@ pub fn add_highlight_annotation(
     let idx = doc
         .add_highlight(page_index, &rects, color, opacity)
         .map_err(|e| e.to_string())?;
+    doc.invalidate_render_cache();
     state.undo_stacks.lock()
         .entry(uid)
         .or_default()
@@ -164,6 +165,7 @@ pub fn add_underline_annotation(
     let idx = doc
         .add_underline(page_index, &rects, color)
         .map_err(|e| e.to_string())?;
+    doc.invalidate_render_cache();
     state.undo_stacks.lock()
         .entry(uid)
         .or_default()
@@ -184,6 +186,7 @@ pub fn add_strikeout_annotation(
     let idx = doc
         .add_strikeout(page_index, &rects, color)
         .map_err(|e| e.to_string())?;
+    doc.invalidate_render_cache();
     state.undo_stacks.lock()
         .entry(uid)
         .or_default()
@@ -207,6 +210,7 @@ pub fn add_text_annotation(
     let idx = doc
         .add_text_annotation(page_index, left, top, &contents, author.as_deref(), color)
         .map_err(|e| e.to_string())?;
+    doc.invalidate_render_cache();
     state.undo_stacks.lock()
         .entry(uid)
         .or_default()
@@ -228,6 +232,7 @@ pub fn add_ink_annotation(
     let idx = doc
         .add_ink_annotation(page_index, &paths, color, width)
         .map_err(|e| e.to_string())?;
+    doc.invalidate_render_cache();
     state.undo_stacks.lock()
         .entry(uid)
         .or_default()
@@ -242,7 +247,7 @@ pub fn remove_annotation(
     annot_index: u32,
     state: State<AppState>,
 ) -> Result<(), String> {
-    with_doc(&id, &state, |doc| {
+    with_doc_mutating(&id, &state, |doc| {
         doc.remove_annotation(page_index, annot_index)
             .map_err(|e| e.to_string())
     })
@@ -256,6 +261,7 @@ pub fn undo_annotation(id: String, state: State<AppState>) -> Result<bool, Strin
         let doc = get_doc(&uid, &state)?;
         doc.remove_annotation(e.page_index, e.annot_index)
             .map_err(|e| e.to_string())?;
+        doc.invalidate_render_cache();
         Ok(true)
     } else {
         Ok(false)
@@ -288,7 +294,7 @@ pub fn set_field_text_value(
     value: String,
     state: State<AppState>,
 ) -> Result<(), String> {
-    with_doc(&id, &state, |doc| {
+    with_doc_mutating(&id, &state, |doc| {
         doc.set_field_text_value(page_index, annot_index, &value)
             .map_err(|e| e.to_string())
     })
@@ -302,7 +308,7 @@ pub fn set_field_checked(
     checked: bool,
     state: State<AppState>,
 ) -> Result<(), String> {
-    with_doc(&id, &state, |doc| {
+    with_doc_mutating(&id, &state, |doc| {
         doc.set_field_checked(page_index, annot_index, checked)
             .map_err(|e| e.to_string())
     })
@@ -457,4 +463,18 @@ fn with_doc<T>(
     let uid = parse_uuid(id)?;
     let doc = get_doc(&uid, state)?;
     f(&doc)
+}
+
+/// Like `with_doc` but clears the render cache after the callback succeeds,
+/// so stale bitmaps are not served after the document is mutated.
+fn with_doc_mutating<T>(
+    id: &str,
+    state: &State<AppState>,
+    f: impl FnOnce(&pdf_core::Document) -> Result<T, String>,
+) -> Result<T, String> {
+    let uid = parse_uuid(id)?;
+    let doc = get_doc(&uid, state)?;
+    let result = f(&doc)?;
+    doc.invalidate_render_cache();
+    Ok(result)
 }

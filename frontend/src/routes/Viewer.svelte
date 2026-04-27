@@ -263,14 +263,16 @@
           const idx = Number((entry.target as HTMLElement).dataset.pageIndex);
           if (entry.isIntersecting) {
             next.add(idx);
-            if (idx > 0) next.add(idx - 1);
-            if (idx < pages.length - 1) next.add(idx + 1);
+            for (let d = 1; d <= 2; d++) {
+              if (idx - d >= 0) next.add(idx - d);
+              if (idx + d < pages.length) next.add(idx + d);
+            }
           }
         }
         visibleSet = next;
         if (next.size > 0) vstore.setCurrentPage(Math.min(...next));
       },
-      { root: container, rootMargin: "200px 0px", threshold: 0.01 }
+      { root: container, rootMargin: "1200px 0px", threshold: 0.01 }
     );
     requestAnimationFrame(() => {
       container?.querySelectorAll<HTMLElement>("[data-page-index]").forEach((el) => obs.observe(el));

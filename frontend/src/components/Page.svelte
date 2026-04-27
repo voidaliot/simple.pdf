@@ -63,40 +63,31 @@
 
   // IPC-based image loading — avoids pdf:// custom scheme which WebView2
   // blocks when the frontend is served from the HTTP dev server.
-  type ImgState = "idle" | "loading" | "loaded" | "error";
-  let imgState = $state<ImgState>("idle");
+  //
+  // imgSrc persists across re-renders so the OLD frame stays on screen while
+  // the new one loads (no skeleton flash on zoom/scroll). Skeleton only shows
+  // when the page has never been rendered (imgSrc === "").
   let imgSrc = $state("");
   let imgError = $state("");
 
   $effect(() => {
-    if (!visible) {
-      imgState = "idle";
-      imgSrc = "";
-      imgError = "";
-      return;
-    }
+    if (!visible) return; // don't tear down existing image when scrolled away
 
     // Capture reactive inputs before the async gap.
     const id = docId;
     const idx = pageIndex;
     const scale = renderScale;
-
-    imgState = "loading";
-    imgError = "";
     let cancelled = false;
 
     renderPageB64(id, idx, scale)
       .then((dataUrl) => {
         if (!cancelled) {
           imgSrc = dataUrl;
-          imgState = "loaded";
+          imgError = "";
         }
       })
       .catch((e: unknown) => {
-        if (!cancelled) {
-          imgError = String(e);
-          imgState = "error";
-        }
+        if (!cancelled) imgError = String(e);
       });
 
     return () => { cancelled = true; };
@@ -224,16 +215,14 @@
     style:left="{innerLeft}px"
     style:transform="rotate({rotation}deg)"
   >
-    <!-- Page image -->
-    {#if imgState === "loaded"}
+    <!-- Page image: keep old frame while reloading; skeleton only on first load -->
+    {#if imgSrc}
       <img src={imgSrc} alt="Page {pageIndex + 1}" width={cssW} height={cssH}
         draggable="false" />
-    {:else if imgState === "error"}
+    {:else if imgError}
       <div class="error-overlay" title={imgError}>
         <span>⚠ render failed</span>
-        {#if imgError}
-          <small class="error-detail">{imgError.slice(0, 120)}</small>
-        {/if}
+        <small class="error-detail">{imgError.slice(0, 120)}</small>
       </div>
     {:else}
       <div class="skeleton" aria-hidden="true"></div>
