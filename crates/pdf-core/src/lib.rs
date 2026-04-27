@@ -1,10 +1,12 @@
 pub mod annotations;
 pub mod error;
+pub mod forms;
 pub mod render;
 pub mod text;
 
 pub use annotations::{AnnRect, Annotation};
 pub use error::{PdfError, PdfResult};
+pub use forms::FormField;
 pub use render::{PageSize, RenderRequest};
 pub use text::TextSpan;
 

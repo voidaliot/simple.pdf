@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { pageUrl, type TextSpan, type Annotation, type AnnRect } from "../lib/ipc";
+  import { pageUrl, type TextSpan, type Annotation, type AnnRect, type FormField } from "../lib/ipc";
 
   export interface Highlight {
     left: number;
@@ -22,6 +22,8 @@
     highlights?: Highlight[];
     activeHighlight?: number;
     annotations?: Annotation[];
+    formFields?: FormField[];
+    xfaReadOnly?: boolean;
     activeTool?: AnnotTool;
     inkColor?: [number, number, number];
     inkWidth?: number;
@@ -29,6 +31,8 @@
     onTextSelected?: (rects: AnnRect[]) => void;
     onInkStroke?: (paths: [number, number][][]) => void;
     onDeleteAnnotation?: (annotIndex: number) => void;
+    onFieldText?: (annotIndex: number, value: string) => void;
+    onFieldChecked?: (annotIndex: number, checked: boolean) => void;
   }
 
   let {
@@ -36,10 +40,13 @@
     rotation = 0,
     textSpans, highlights, activeHighlight = -1,
     annotations,
+    formFields,
+    xfaReadOnly = false,
     activeTool = "none",
     inkColor = [255, 0, 0],
     inkWidth = 2,
     onPageClick, onTextSelected, onInkStroke, onDeleteAnnotation,
+    onFieldText, onFieldChecked,
   }: Props = $props();
 
   const dpr = window.devicePixelRatio ?? 1;
@@ -58,7 +65,28 @@
 
   let loaded = $state(false);
   let error = $state(false);
-  $effect(() => { if (src) { loaded = false; error = false; } });
+  let errorText = $state("");
+
+  $effect(() => {
+    if (src) {
+      loaded = false;
+      error = false;
+      errorText = "";
+    }
+  });
+
+  async function onImgError() {
+    error = true;
+    // Fetch the URL to retrieve the actual server-side error message.
+    if (src) {
+      try {
+        const resp = await fetch(src);
+        errorText = await resp.text();
+      } catch (e) {
+        errorText = String(e);
+      }
+    }
+  }
 
   // ── Ink drawing ─────────────────────────────────────────────────────────────
   let inkDrawing = $state(false);
@@ -185,12 +213,17 @@
     <!-- Page image -->
     {#if visible && src}
       <img {src} alt="Page {pageIndex + 1}" width={cssW} height={cssH} draggable="false"
-        onload={() => { loaded = true; }} onerror={() => { error = true; }} />
+        onload={() => { loaded = true; }} onerror={onImgError} />
       {#if !loaded && !error}
         <div class="skeleton" aria-hidden="true"></div>
       {/if}
       {#if error}
-        <div class="error-overlay"><span>⚠ render failed</span></div>
+        <div class="error-overlay" title={errorText}>
+          <span>⚠ render failed</span>
+          {#if errorText}
+            <small class="error-detail">{errorText.slice(0, 120)}</small>
+          {/if}
+        </div>
       {/if}
     {:else}
       <div class="skeleton" aria-hidden="true"></div>
@@ -260,6 +293,100 @@
       </div>
     {/if}
 
+    <!-- AcroForm field overlay -->
+    {#if formFields && formFields.length > 0}
+      <div class="form-layer" aria-label="Form fields">
+        {#each formFields as field}
+          {#if field.kind === "text"}
+            {#if field.multiline}
+              <!-- svelte-ignore a11y_autofocus -->
+              <textarea
+                class="form-field form-text"
+                style:left="{field.rect.left * cssW}px"
+                style:top="{field.rect.top * cssH}px"
+                style:width="{field.rect.width * cssW}px"
+                style:height="{field.rect.height * cssH}px"
+                style:font-size="{Math.max(8, field.rect.height * cssH * 0.6)}px"
+                value={field.value}
+                disabled={xfaReadOnly}
+                aria-label={field.name || "Text field"}
+                onchange={(e) => onFieldText?.(field.index, (e.target as HTMLTextAreaElement).value)}
+              ></textarea>
+            {:else}
+              <input
+                type="text"
+                class="form-field form-text"
+                style:left="{field.rect.left * cssW}px"
+                style:top="{field.rect.top * cssH}px"
+                style:width="{field.rect.width * cssW}px"
+                style:height="{field.rect.height * cssH}px"
+                style:font-size="{Math.max(8, field.rect.height * cssH * 0.75)}px"
+                value={field.value}
+                disabled={xfaReadOnly}
+                aria-label={field.name || "Text field"}
+                onchange={(e) => onFieldText?.(field.index, (e.target as HTMLInputElement).value)}
+              />
+            {/if}
+          {:else if field.kind === "checkbox"}
+            <input
+              type="checkbox"
+              class="form-field form-check"
+              style:left="{field.rect.left * cssW + (field.rect.width * cssW) / 2 - 8}px"
+              style:top="{field.rect.top * cssH + (field.rect.height * cssH) / 2 - 8}px"
+              checked={field.checked}
+              disabled={xfaReadOnly}
+              aria-label={field.name || "Checkbox"}
+              onchange={(e) => onFieldChecked?.(field.index, (e.target as HTMLInputElement).checked)}
+            />
+          {:else if field.kind === "radio"}
+            <input
+              type="radio"
+              class="form-field form-check"
+              style:left="{field.rect.left * cssW + (field.rect.width * cssW) / 2 - 8}px"
+              style:top="{field.rect.top * cssH + (field.rect.height * cssH) / 2 - 8}px"
+              checked={field.checked}
+              disabled={xfaReadOnly}
+              name={field.name}
+              aria-label={field.name || "Radio button"}
+              onchange={(e) => { if ((e.target as HTMLInputElement).checked) onFieldChecked?.(field.index, true); }}
+            />
+          {:else if field.kind === "combo"}
+            <select
+              class="form-field form-select"
+              style:left="{field.rect.left * cssW}px"
+              style:top="{field.rect.top * cssH}px"
+              style:width="{field.rect.width * cssW}px"
+              style:height="{field.rect.height * cssH}px"
+              style:font-size="{Math.max(8, field.rect.height * cssH * 0.65)}px"
+              disabled={xfaReadOnly}
+              aria-label={field.name || "Dropdown"}
+              onchange={(e) => onFieldText?.(field.index, (e.target as HTMLSelectElement).value)}
+            >
+              {#each field.options as opt}
+                <option value={opt} selected={opt === field.value}>{opt}</option>
+              {/each}
+            </select>
+          {:else if field.kind === "list"}
+            <select
+              class="form-field form-select"
+              multiple
+              style:left="{field.rect.left * cssW}px"
+              style:top="{field.rect.top * cssH}px"
+              style:width="{field.rect.width * cssW}px"
+              style:height="{field.rect.height * cssH}px"
+              style:font-size="{Math.max(8, field.rect.height * cssH * 0.5)}px"
+              disabled={xfaReadOnly}
+              aria-label={field.name || "List"}
+            >
+              {#each field.options as opt}
+                <option value={opt} selected={opt === field.value}>{opt}</option>
+              {/each}
+            </select>
+          {/if}
+        {/each}
+      </div>
+    {/if}
+
     <!-- Ink canvas (for drawing) -->
     {#if activeTool === "ink"}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -309,8 +436,13 @@
     100% { background-position: -200% center; }
   }
   .error-overlay {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 6px;
     background: var(--bg-elev); color: var(--danger); font-size: 13px;
+  }
+  .error-detail {
+    font-size: 10px; color: var(--fg-muted); max-width: 90%;
+    word-break: break-all; text-align: center; opacity: 0.8;
   }
 
   /* Annotation overlays */
@@ -351,6 +483,25 @@
     border: 1px solid rgba(200,160,0,0.6); border-radius: 1px;
   }
   .highlight-rect.active-match { background: rgba(255,120,0,0.5); border-color: rgba(200,80,0,0.9); }
+
+  /* Form fields overlay */
+  .form-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .form-field {
+    position: absolute;
+    pointer-events: auto;
+    box-sizing: border-box;
+    border: 1px solid rgba(0, 100, 255, 0.4);
+    background: rgba(255, 255, 255, 0.85);
+    color: #111;
+    padding: 1px 3px;
+    font-family: inherit;
+    outline: none;
+  }
+  .form-field:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,100,255,0.2); }
+  .form-field:disabled { background: rgba(220,220,220,0.6); cursor: default; }
+  .form-text { resize: none; overflow: hidden; }
+  .form-check { width: 16px; height: 16px; padding: 0; border: none; background: none; cursor: pointer; }
+  .form-select { padding: 1px 2px; }
 
   /* Ink canvas */
   .ink-canvas {

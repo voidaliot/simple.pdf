@@ -12,14 +12,16 @@ pub fn handle_thumb_request<R: Runtime>(
         Ok(png) => Response::builder()
             .status(200)
             .header("Content-Type", "image/png")
+            .header("Access-Control-Allow-Origin", "*")
             .header("Cache-Control", "private, max-age=86400")
             .body(png)
             .unwrap(),
         Err(e) => {
-            tracing::warn!("thumb:// render error: {e}");
+            tracing::warn!("thumb:// render error for {}: {e}", request.uri());
             Response::builder()
                 .status(500)
                 .header("Content-Type", "text/plain")
+                .header("Access-Control-Allow-Origin", "*")
                 .body(e.into_bytes())
                 .unwrap()
         }

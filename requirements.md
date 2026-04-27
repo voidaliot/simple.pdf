@@ -41,16 +41,16 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 
 ## 4. Functional — Forms (FR-FORM)
 
-- [ ] **FR-FORM-01** — Detect AcroForm fields and render interactive inputs over them for: text, multi-line text, checkbox, radio, combobox (dropdown), listbox, push button.
-- [ ] **FR-FORM-02** — On save, field values persist in the PDF and regenerated appearances are written so other readers display the filled form.
-- [ ] **FR-FORM-03** — Detect XFA-only forms (via `/XFA` in the catalog) and show a non-blocking banner: "This is an XFA form — some fields may not render. Open in Adobe Reader for full fidelity."
+- [x] **FR-FORM-01** — Detect AcroForm fields and render interactive inputs over them for: text, multi-line text, checkbox, radio, combobox (dropdown), listbox, push button.
+- [x] **FR-FORM-02** — On save, field values persist in the PDF and regenerated appearances are written so other readers display the filled form.
+- [x] **FR-FORM-03** — Detect XFA-only forms (via `/XFA` in the catalog) and show a non-blocking banner: "This is an XFA form — some fields may not render. Open in Adobe Reader for full fidelity."
 - [ ] **FR-FORM-04** — Respect form reset action buttons when the PDF defines them.
 
 ## 5. Functional — Signing (FR-SIGN)
 
 - [ ] **FR-SIGN-01** — Signature-capture modal: user can draw on a canvas with mouse/pen, or import a PNG/JPG. Output is a transparent-background bitmap plus vector paths (for ink).
 - [ ] **FR-SIGN-02** — User places a captured signature as a stamp annotation (`/Stamp`) with a correct AP stream, resizable and movable before finalizing.
-- [ ] **FR-SIGN-03** — Manage saved signatures: list, rename, mark default, delete. Stored under the app's data folder.
+- [x] **FR-SIGN-03** — Manage saved signatures: list, rename, mark default, delete. Stored under the app's data folder.
 
 ## 6. Non-Functional (NFR)
 
@@ -70,17 +70,17 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 
 ## 8. Distribution (DIST)
 
-- [ ] **DIST-PORT-01** — Portable zip runs from USB or network share without admin or install.
-- [ ] **DIST-INST-01** — NSIS installer available as an alternative for users who want file associations and Start Menu entries.
-- [ ] **DIST-ASSOC-01** — `.pdf` file association is opt-in via Settings; writes only to `HKCU` (per-user), never `HKLM`.
-- [ ] **DIST-WV2-01** — If WebView2 runtime is missing, app shows a clear message with a link to the Microsoft installer instead of a cryptic failure.
+- [x] **DIST-PORT-01** — Portable zip runs from USB or network share without admin or install.
+- [x] **DIST-INST-01** — NSIS installer available as an alternative for users who want file associations and Start Menu entries.
+- [x] **DIST-ASSOC-01** — `.pdf` file association is opt-in via Settings; writes only to `HKCU` (per-user), never `HKLM`.
+- [x] **DIST-WV2-01** — If WebView2 runtime is missing, app shows a clear message with a link to the Microsoft installer instead of a cryptic failure.
 
 ## 9. Security & Privacy (SEC)
 
 - [ ] **SEC-NET-01** — Zero outbound network requests in default configuration. URL-paste feature requires an explicit user action per use.
 - [ ] **SEC-JS-01** — PDF JavaScript execution is disabled (PDFium OSS default). Documents cannot run scripts.
 - [ ] **SEC-SAVE-01** — Saves write to a temp file then atomic-rename over the original; original is preserved until success.
-- [ ] **SEC-LOG-01** — Logs are local-only under the app data folder. No telemetry without explicit opt-in. No personally identifying information in logs.
+- [x] **SEC-LOG-01** — Logs are local-only under the app data folder. No telemetry without explicit opt-in. No personally identifying information in logs.
 
 ---
 

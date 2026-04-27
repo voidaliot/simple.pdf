@@ -12,14 +12,16 @@ pub fn handle_pdf_request<R: Runtime>(
         Ok(png) => Response::builder()
             .status(200)
             .header("Content-Type", "image/png")
+            .header("Access-Control-Allow-Origin", "*")
             .header("Cache-Control", "private, max-age=3600")
             .body(png)
             .unwrap(),
         Err(e) => {
-            tracing::warn!("pdf:// render error: {e}");
+            tracing::warn!("pdf:// render error for {}: {e}", request.uri());
             Response::builder()
                 .status(500)
                 .header("Content-Type", "text/plain")
+                .header("Access-Control-Allow-Origin", "*")
                 .body(e.into_bytes())
                 .unwrap()
         }

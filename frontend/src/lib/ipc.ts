@@ -86,6 +86,46 @@ export function thumbUrl(filePath: string, maxW = 240): string {
   return `thumb://localhost/page?path=${encodeURIComponent(filePath)}&maxw=${maxW}`;
 }
 
+// ── Forms ─────────────────────────────────────────────────────────────────────
+
+export interface FormField {
+  index: number;
+  /** "text" | "checkbox" | "radio" | "combo" | "list" | "push" | "signature" | "other" */
+  kind: string;
+  name: string;
+  value: string;
+  options: string[];
+  checked: boolean;
+  multiline: boolean;
+  rect: AnnRect;
+}
+
+export async function getFormType(id: string): Promise<string> {
+  return invoke<string>("get_form_type", { id });
+}
+
+export async function getFormFields(id: string, pageIndex: number): Promise<FormField[]> {
+  return invoke<FormField[]>("get_form_fields", { id, pageIndex });
+}
+
+export async function setFieldTextValue(
+  id: string,
+  pageIndex: number,
+  annotIndex: number,
+  value: string,
+): Promise<void> {
+  return invoke("set_field_text_value", { id, pageIndex, annotIndex, value });
+}
+
+export async function setFieldChecked(
+  id: string,
+  pageIndex: number,
+  annotIndex: number,
+  checked: boolean,
+): Promise<void> {
+  return invoke("set_field_checked", { id, pageIndex, annotIndex, checked });
+}
+
 // ── Annotations ───────────────────────────────────────────────────────────────
 
 export async function getPageAnnotations(id: string, pageIndex: number): Promise<Annotation[]> {
@@ -166,6 +206,16 @@ export async function listFolderPdfs(path: string): Promise<string[]> {
 
 export async function revealInExplorer(path: string): Promise<void> {
   return invoke("reveal_in_explorer", { path });
+}
+
+// ── File association ──────────────────────────────────────────────────────────
+
+export async function getPdfAssociation(): Promise<boolean> {
+  return invoke<boolean>("get_pdf_association");
+}
+
+export async function setPdfAssociation(enable: boolean): Promise<void> {
+  return invoke("set_pdf_association", { enable });
 }
 
 // ── Network ───────────────────────────────────────────────────────────────────

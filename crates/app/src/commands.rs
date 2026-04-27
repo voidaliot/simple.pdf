@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use pdf_core::{AnnRect, Annotation, PageSize, TextSpan};
+use pdf_core::{AnnRect, Annotation, FormField, PageSize, TextSpan};
 use serde::Serialize;
 use shared_types::AppVersion;
 use std::path::PathBuf;
@@ -226,6 +226,52 @@ pub fn undo_annotation(id: String, state: State<AppState>) -> Result<bool, Strin
     }
 }
 
+// ── Forms (AcroForms) ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_form_type(id: String, state: State<AppState>) -> Result<String, String> {
+    with_doc(&id, &state, |doc| doc.form_type().map_err(|e| e.to_string()))
+}
+
+#[tauri::command]
+pub fn get_form_fields(
+    id: String,
+    page_index: u32,
+    state: State<AppState>,
+) -> Result<Vec<FormField>, String> {
+    with_doc(&id, &state, |doc| {
+        doc.get_form_fields(page_index).map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+pub fn set_field_text_value(
+    id: String,
+    page_index: u32,
+    annot_index: u32,
+    value: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    with_doc(&id, &state, |doc| {
+        doc.set_field_text_value(page_index, annot_index, &value)
+            .map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+pub fn set_field_checked(
+    id: String,
+    page_index: u32,
+    annot_index: u32,
+    checked: bool,
+    state: State<AppState>,
+) -> Result<(), String> {
+    with_doc(&id, &state, |doc| {
+        doc.set_field_checked(page_index, annot_index, checked)
+            .map_err(|e| e.to_string())
+    })
+}
+
 // ── Save ──────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -288,6 +334,73 @@ pub async fn download_url_to_temp(url: String) -> Result<String, String> {
     ));
     std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
     Ok(tmp.to_string_lossy().into_owned())
+}
+
+// ── File association (Windows HKCU) ──────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_pdf_association() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(key) = hkcu.open_subkey("Software\\Classes\\.pdf") {
+            let current: String = key.get_value("").unwrap_or_default();
+            return Ok(current == "SimplePDF.Document");
+        }
+        Ok(false)
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(false)
+}
+
+#[tauri::command]
+pub fn set_pdf_association(enable: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::{KEY_SET_VALUE, HKEY_CURRENT_USER};
+        use winreg::RegKey;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+
+        if enable {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let cmd = format!("\"{}\" \"%1\"", exe.display());
+
+            let (k, _) = hkcu
+                .create_subkey("Software\\Classes\\.pdf")
+                .map_err(|e| e.to_string())?;
+            k.set_value("", &"SimplePDF.Document").map_err(|e| e.to_string())?;
+
+            let (k, _) = hkcu
+                .create_subkey("Software\\Classes\\SimplePDF.Document")
+                .map_err(|e| e.to_string())?;
+            k.set_value("", &"PDF Document").map_err(|e| e.to_string())?;
+
+            let (k, _) = hkcu
+                .create_subkey(
+                    "Software\\Classes\\SimplePDF.Document\\shell\\open\\command",
+                )
+                .map_err(|e| e.to_string())?;
+            k.set_value("", &cmd.as_str()).map_err(|e| e.to_string())?;
+
+        } else {
+            // Remove only if we set it
+            if let Ok(k) = hkcu.open_subkey_with_flags(
+                "Software\\Classes\\.pdf",
+                KEY_SET_VALUE,
+            ) {
+                let cur: String = k.get_value("").unwrap_or_default();
+                if cur == "SimplePDF.Document" {
+                    let _ = hkcu.delete_subkey_all("Software\\Classes\\.pdf");
+                }
+            }
+            let _ = hkcu.delete_subkey_all("Software\\Classes\\SimplePDF.Document");
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    Err("File association is only supported on Windows".into())
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────

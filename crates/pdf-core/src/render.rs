@@ -44,20 +44,33 @@ impl Document {
 
             let page_w = page.width().value;
             let page_h = page.height().value;
+
+            if page_w <= 0.0 || page_h <= 0.0 {
+                return Err(PdfError::Render(format!(
+                    "page {} has invalid dimensions: {page_w}×{page_h}",
+                    req.page_index
+                )));
+            }
+
             let px_w = (page_w * req.scale).round().max(1.0) as i32;
             let px_h = (page_h * req.scale).round().max(1.0) as i32;
 
+            // Use explicit target size (both axes) so pdfium doesn't apply
+            // aspect-ratio constraints that can produce zero-dimension bitmaps,
+            // and disable form data overlay (we render that in the HTML layer).
             let config = PdfRenderConfig::new()
                 .set_target_width(px_w)
-                .set_maximum_height(px_h);
+                .set_target_height(px_h)
+                .render_form_data(false);
 
             let bitmap = page
                 .render_with_config(&config)
-                .map_err(|e| PdfError::Render(e.to_string()))?;
+                .map_err(|e| PdfError::Render(format!(
+                    "pdfium render error (page {}, {}×{}): {}",
+                    req.page_index, px_w, px_h, e
+                )))?;
 
-            let img: RgbaImage = bitmap
-                .as_image()
-                .into_rgba8();
+            let img: RgbaImage = bitmap.as_image().into_rgba8();
 
             let mut buf = std::io::Cursor::new(Vec::new());
             DynamicImage::ImageRgba8(img)
