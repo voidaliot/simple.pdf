@@ -19,6 +19,7 @@
     getFormFields,
     setFieldTextValue,
     setFieldChecked,
+    resetFormFields,
     type TextSpan,
     type Annotation,
     type AnnRect,
@@ -37,7 +38,7 @@
   let visibleSet = $state(new Set<number>());
   let loadingPages = $state(false);
 
-  // ── Text spans ──────────────────────────────────────────────────────────────
+  // ── Text spans ────────────────────────────────────────────────────────────────
   let textSpansByPage = $state<(TextSpan[] | undefined)[]>([]);
 
   async function loadTextSpans(pageIndex: number) {
@@ -49,7 +50,7 @@
 
   $effect(() => { for (const idx of visibleSet) loadTextSpans(idx); });
 
-  // ── Forms ────────────────────────────────────────────────────────────────────
+  // ── Forms ─────────────────────────────────────────────────────────────────────
   let formType = $state("none");
   let formFieldsByPage = $state<(FormField[] | undefined)[]>([]);
 
@@ -76,11 +77,15 @@
     tabs.markDirty(tab.id, true);
   }
 
-  // ── Annotations ─────────────────────────────────────────────────────────────
+  async function handlePushButton(pageIndex: number) {
+    await resetFormFields(docId, pageIndex).catch(console.error);
+    formFieldsByPage[pageIndex] = undefined;
+    await loadFormFields(pageIndex);
+    tabs.markDirty(tab.id, true);
+  }
+
+  // ── Annotations ───────────────────────────────────────────────────────────────
   let annotsByPage = $state<(Annotation[] | undefined)[]>([]);
-  // Per-page version counter — bumped after every mutation. The Page
-  // component depends on this in its render $effect so PDFium re-rasterises
-  // the page (it bakes annotations into the bitmap) whenever annotations change.
   let annotsVersionByPage = $state<number[]>([]);
 
   function bumpAnnotsVersion(pageIndex: number) {
@@ -97,11 +102,13 @@
     bumpAnnotsVersion(pageIndex);
   }
 
-  $effect(() => { for (const idx of visibleSet) {
-    if (annotsByPage[idx] === undefined) loadAnnotations(idx);
-  }});
+  $effect(() => {
+    for (const idx of visibleSet) {
+      if (annotsByPage[idx] === undefined) loadAnnotations(idx);
+    }
+  });
 
-  // ── Annotation sidebar ──────────────────────────────────────────────────────
+  // ── Annotation sidebar ────────────────────────────────────────────────────────
   let sidebarOpen = $state(false);
 
   const allAnnotations = $derived.by(() => {
@@ -113,12 +120,12 @@
     return list;
   });
 
-  function scrollToAnnotation(pageIndex: number) {
+  function scrollToPage(pageIndex: number) {
     container?.querySelector<HTMLElement>(`[data-page-index="${pageIndex}"]`)
       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
-  // ── Annotation tools ────────────────────────────────────────────────────────
+  // ── Annotation tools ──────────────────────────────────────────────────────────
   type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "ink";
   let activeTool = $state<AnnotTool>("none");
   let toolColor = $state<[number, number, number]>([255, 214, 0]);
@@ -142,13 +149,9 @@
     await refreshAnnotations(pageIndex);
   }
 
-  async function handleTextSelection(
-    pageIndex: number,
-    selRects: AnnRect[],
-  ) {
+  async function handleTextSelection(pageIndex: number, selRects: AnnRect[]) {
     if (activeTool === "none" || activeTool === "text" || activeTool === "ink") return;
     if (selRects.length === 0) return;
-
     if (activeTool === "highlight") {
       await addHighlightAnnotation(docId, pageIndex, selRects, toolColor, 0.4);
     } else if (activeTool === "underline") {
@@ -173,11 +176,14 @@
     await refreshAnnotations(pageIndex);
   }
 
-  // ── Signing ─────────────────────────────────────────────────────────────────
+  // ── Signing ───────────────────────────────────────────────────────────────────
   let signOpen = $state(false);
 
-  // ── Find-in-page ─────────────────────────────────────────────────────────────
-  interface FindMatch { pageIndex: number; left: number; top: number; width: number; height: number; }
+  // ── Find-in-page ──────────────────────────────────────────────────────────────
+  interface FindMatch {
+    pageIndex: number;
+    left: number; top: number; width: number; height: number;
+  }
 
   let findOpen = $state(false);
   let findQuery = $state("");
@@ -201,24 +207,30 @@
 
   const pageHighlights = $derived.by(() => {
     const map = new Map<number, Highlight[]>();
-    for (const m of findMatches)
-      (map.get(m.pageIndex) ?? map.set(m.pageIndex, []).get(m.pageIndex)!).push(m);
+    for (const m of findMatches) {
+      let arr = map.get(m.pageIndex);
+      if (!arr) { arr = []; map.set(m.pageIndex, arr); }
+      arr.push(m);
+    }
     return map;
   });
 
+  // Index of the active match within its page's highlight list
   const activeByPage = $derived.by(() => {
     const cur = findMatches[findCurrentMatch];
     if (!cur) return new Map<number, number>();
-    let idx = 0;
-    for (const m of findMatches.slice(0, findCurrentMatch + 1))
-      if (m.pageIndex === cur.pageIndex) idx++;
-    return new Map([[cur.pageIndex, idx - 1]]);
+    let idxInPage = 0;
+    for (const m of findMatches.slice(0, findCurrentMatch + 1)) {
+      if (m.pageIndex === cur.pageIndex) idxInPage++;
+    }
+    return new Map([[cur.pageIndex, idxInPage - 1]]);
   });
 
   $effect(() => { findQuery; findCurrentMatch = 0; });
 
   async function openFindBar() {
     findOpen = true;
+    // Pre-load all text spans so search works immediately
     for (let i = 0; i < vstore.pageSizes.length; i++) loadTextSpans(i);
     await tick();
     findInput?.focus();
@@ -227,23 +239,30 @@
 
   function closeFindBar() { findOpen = false; findQuery = ""; }
 
+  function navigateToMatch(idx: number) {
+    const m = findMatches[idx];
+    if (m) scrollToPage(m.pageIndex);
+  }
+
   function nextMatch() {
     if (!findMatches.length) return;
     findCurrentMatch = (findCurrentMatch + 1) % findMatches.length;
-    const m = findMatches[findCurrentMatch];
-    if (m) container?.querySelector<HTMLElement>(`[data-page-index="${m.pageIndex}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    navigateToMatch(findCurrentMatch);
   }
 
   function prevMatch() {
     if (!findMatches.length) return;
     findCurrentMatch = (findCurrentMatch - 1 + findMatches.length) % findMatches.length;
-    const m = findMatches[findCurrentMatch];
-    if (m) container?.querySelector<HTMLElement>(`[data-page-index="${m.pageIndex}"]`)
-      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    navigateToMatch(findCurrentMatch);
   }
 
-  // ── Page loading ─────────────────────────────────────────────────────────────
+  // Scroll to current match when it changes
+  $effect(() => {
+    const idx = findCurrentMatch;
+    if (findMatches.length > 0 && findOpen) navigateToMatch(idx);
+  });
+
+  // ── Page loading ──────────────────────────────────────────────────────────────
   onMount(() => {
     loadingPages = true;
     getPageSizes(docId)
@@ -265,39 +284,51 @@
   $effect(() => {
     const pages = vstore.pageSizes;
     if (!pages.length || !container) return;
+
     const obs = new IntersectionObserver(
       (entries) => {
-        const next = new Set(visibleSet);
+        const directlyVisible = new Set<number>();
         for (const entry of entries) {
           const idx = Number((entry.target as HTMLElement).dataset.pageIndex);
-          if (entry.isIntersecting) {
-            next.add(idx);
-            // ±1 page prefetch — wider ranges pile up too many concurrent
-            // IPC calls on the doc mutex and freeze the UI on fast scroll.
-            if (idx > 0) next.add(idx - 1);
-            if (idx < pages.length - 1) next.add(idx + 1);
-          }
+          if (entry.isIntersecting) directlyVisible.add(idx);
         }
+        if (directlyVisible.size === 0) return;
+
+        const next = new Set(visibleSet);
+        for (const idx of directlyVisible) next.add(idx);
         visibleSet = next;
-        if (next.size > 0) vstore.setCurrentPage(Math.min(...next));
+        vstore.setCurrentPage(Math.min(...directlyVisible));
+
+        // Prefetch ±1 neighbours after a tick (avoids piling up concurrent renders)
+        setTimeout(() => {
+          const prefetch = new Set(visibleSet);
+          for (const idx of directlyVisible) {
+            if (idx > 0) prefetch.add(idx - 1);
+            if (idx < pages.length - 1) prefetch.add(idx + 1);
+          }
+          visibleSet = prefetch;
+        }, 0);
       },
       { root: container, rootMargin: "1200px 0px", threshold: 0.01 }
     );
+
     requestAnimationFrame(() => {
-      container?.querySelectorAll<HTMLElement>("[data-page-index]").forEach((el) => obs.observe(el));
+      container?.querySelectorAll<HTMLElement>("[data-page-index]")
+        .forEach((el) => obs.observe(el));
     });
+
     return () => obs.disconnect();
   });
 
   // ── Keyboard ──────────────────────────────────────────────────────────────────
   async function onKeyDown(e: KeyboardEvent) {
     if (e.ctrlKey) {
-      if (e.key === "f") { e.preventDefault(); openFindBar(); return; }
-      if (e.key === "s") { e.preventDefault(); await handleSave(); return; }
-      if (e.key === "z") { e.preventDefault(); await handleUndo(); return; }
-      if (e.key === "=" || e.key === "+") { e.preventDefault(); vstore.setZoom(vstore.effectiveZoom * 1.1); return; }
-      if (e.key === "-") { e.preventDefault(); vstore.setZoom(vstore.effectiveZoom * 0.9); return; }
-      if (e.key === "0") { e.preventDefault(); vstore.setZoomMode("fit-width"); return; }
+      if (e.key === "f" || e.key === "F") { e.preventDefault(); openFindBar(); return; }
+      if (e.key === "s" || e.key === "S") { e.preventDefault(); await handleSave(); return; }
+      if (e.key === "z" || e.key === "Z") { e.preventDefault(); await handleUndo(); return; }
+      if (e.key === "=" || e.key === "+") { e.preventDefault(); vstore.zoomIn(); return; }
+      if (e.key === "-")                  { e.preventDefault(); vstore.zoomOut(); return; }
+      if (e.key === "0")                  { e.preventDefault(); vstore.setZoomMode("fit-width"); return; }
     }
     if (e.key === "Escape") {
       if (findOpen) { e.preventDefault(); closeFindBar(); }
@@ -313,7 +344,7 @@
   function onWheel(e: WheelEvent) {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    vstore.setZoom(vstore.effectiveZoom * (e.deltaY < 0 ? 1.1 : 0.9));
+    if (e.deltaY < 0) vstore.zoomIn(); else vstore.zoomOut();
   }
 
   function onPageInput(e: Event) {
@@ -337,13 +368,16 @@
   }
 
   const zoomPct = $derived(Math.round(vstore.effectiveZoom * 100));
+
   const TOOL_ICONS: Record<AnnotTool, string> = {
     none: "✏️", highlight: "🖊", underline: "U̲", strikeout: "S̶", text: "💬", ink: "🖊️",
   };
   const TOOL_LABELS: Record<AnnotTool, string> = {
-    none: "No tool", highlight: "Highlight", underline: "Underline", strikeout: "Strikethrough",
-    text: "Sticky note", ink: "Freehand",
+    none: "No tool", highlight: "Highlight", underline: "Underline",
+    strikeout: "Strikethrough", text: "Sticky note", ink: "Freehand",
   };
+
+  const noResults = $derived(findOpen && findQuery.trim().length > 0 && findMatches.length === 0);
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
@@ -357,49 +391,84 @@
 
     <div class="toolbar-center">
       {#if vstore.pageSizes.length > 0}
-        <span class="page-nav">
-          <label>
-            Page
-            <input type="number" min="1" max={vstore.pageSizes.length}
-              value={vstore.currentPage + 1} onchange={onPageInput} aria-label="Current page" />
-          </label>
+        <div class="page-nav">
+          <span class="page-label-text">Page</span>
+          <input
+            type="number"
+            min="1"
+            max={vstore.pageSizes.length}
+            value={vstore.currentPage + 1}
+            aria-label="Current page"
+            onchange={onPageInput}
+            onclick={(e) => (e.target as HTMLInputElement).select()}
+            onfocus={(e) => (e.target as HTMLInputElement).select()}
+          />
           <span class="page-total">/ {vstore.pageSizes.length}</span>
-        </span>
+        </div>
       {/if}
     </div>
 
     <div class="toolbar-right">
-      <!-- Zoom -->
-      <button onclick={() => vstore.setZoom(vstore.effectiveZoom * 0.8)} title="Zoom out (Ctrl+-)">−</button>
-      <span class="zoom-pct">{zoomPct}%</span>
-      <button onclick={() => vstore.setZoom(vstore.effectiveZoom * 1.2)} title="Zoom in (Ctrl++)">+</button>
-      <button class:active={vstore.zoomMode === "fit-width"} onclick={() => vstore.setZoomMode("fit-width")} title="Fit width">⟺</button>
-      <button class:active={vstore.zoomMode === "fit-page"} onclick={() => vstore.setZoomMode("fit-page")} title="Fit page">□</button>
-      <span class="sep"></span>
+      <!-- Zoom controls with snap levels -->
+      <button onclick={() => vstore.zoomOut()} title="Zoom out (Ctrl+−)" aria-label="Zoom out">−</button>
+      <button
+        class="zoom-pct-btn"
+        onclick={() => vstore.setZoomMode("fit-width")}
+        title="Click for fit-width; also Ctrl+0"
+        aria-label="Zoom level — click to fit width"
+      >{zoomPct}%</button>
+      <button onclick={() => vstore.zoomIn()} title="Zoom in (Ctrl++)" aria-label="Zoom in">+</button>
+      <button
+        class:active={vstore.zoomMode === "fit-width"}
+        onclick={() => vstore.setZoomMode("fit-width")}
+        title="Fit width (Ctrl+0)"
+        aria-label="Fit width"
+      >⟺</button>
+      <button
+        class:active={vstore.zoomMode === "fit-page"}
+        onclick={() => vstore.setZoomMode("fit-page")}
+        title="Fit page"
+        aria-label="Fit page"
+      >□</button>
+
+      <span class="sep" aria-hidden="true"></span>
+
       <!-- Rotate -->
-      <button onclick={() => vstore.rotateCcw()} title="Rotate left">↺</button>
-      <button onclick={() => vstore.rotateCw()} title="Rotate right">↻</button>
-      <span class="sep"></span>
+      <button onclick={() => vstore.rotateCcw()} title="Rotate left" aria-label="Rotate left">↺</button>
+      <button onclick={() => vstore.rotateCw()} title="Rotate right" aria-label="Rotate right">↻</button>
+
+      <span class="sep" aria-hidden="true"></span>
+
       <!-- Annotation tools -->
       {#each (["highlight","underline","strikeout","text","ink"] as const) as t}
-        <button class:active={activeTool === t} onclick={() => activeTool = activeTool === t ? "none" : t}
-          title="{TOOL_LABELS[t]}" aria-pressed={activeTool === t}>{TOOL_ICONS[t]}</button>
+        <button
+          class:active={activeTool === t}
+          onclick={() => { activeTool = activeTool === t ? "none" : t; }}
+          title={TOOL_LABELS[t]}
+          aria-pressed={activeTool === t}
+          aria-label={TOOL_LABELS[t]}
+        >{TOOL_ICONS[t]}</button>
       {/each}
-      <input type="color" class="color-pick"
-        value="#{toolColor.map(c => c.toString(16).padStart(2,'0')).join('')}"
+      <input
+        type="color"
+        class="color-pick"
+        value="#{toolColor.map((c) => c.toString(16).padStart(2, "0")).join("")}"
         title="Annotation color"
+        aria-label="Annotation color"
         oninput={(e) => {
           const v = (e.target as HTMLInputElement).value.slice(1);
           toolColor = [parseInt(v.slice(0,2),16), parseInt(v.slice(2,4),16), parseInt(v.slice(4,6),16)];
         }}
       />
-      <span class="sep"></span>
+
+      <span class="sep" aria-hidden="true"></span>
+
       <!-- Find, sidebar, sign, save -->
-      <button class:active={findOpen} onclick={openFindBar} title="Find (Ctrl+F)">🔍</button>
-      <button class:active={sidebarOpen} onclick={() => sidebarOpen = !sidebarOpen} title="Comments">💬</button>
-      <button onclick={() => signOpen = true} title="Sign">✍️</button>
+      <button class:active={findOpen} onclick={openFindBar} title="Find (Ctrl+F)" aria-label="Find in document">🔍</button>
+      <button class:active={sidebarOpen} onclick={() => { sidebarOpen = !sidebarOpen; }} title="Comments sidebar" aria-label="Toggle comments">💬</button>
+      <button onclick={() => { signOpen = true; }} title="Sign document" aria-label="Sign document">✍️</button>
       {#if tab.dirty}
-        <button onclick={handleSave} title="Save (Ctrl+S)" class="save-btn">💾</button>
+        <button onclick={handleSave} title="Save (Ctrl+S)" class="save-btn" aria-label="Save document">💾</button>
       {/if}
     </div>
   </div>
@@ -407,31 +476,49 @@
   <!-- ── XFA warning ── -->
   {#if formType === "xfa_full" || formType === "xfa_foreground"}
     <div class="xfa-banner" role="alert">
-      ⚠ This PDF uses XFA forms, which are not supported. Fields are displayed read-only.
+      ⚠ This PDF uses XFA forms — not fully supported. Fields shown read-only.
     </div>
   {/if}
 
   <!-- ── Find bar ── -->
   {#if findOpen}
-    <div class="find-bar" role="search">
-      <input type="search" placeholder="Find in document…" bind:value={findQuery}
-        bind:this={findInput} onkeydown={onFindKeyDown} aria-label="Search"
-        autocomplete="off" spellcheck="false" />
-      <span class="find-count" aria-live="polite">
+    <div class="find-bar" role="search" aria-label="Find in document">
+      <input
+        type="search"
+        placeholder="Find in document…"
+        bind:value={findQuery}
+        bind:this={findInput}
+        class:no-results={noResults}
+        onkeydown={onFindKeyDown}
+        aria-label="Search query"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <span class="find-count" aria-live="polite" aria-atomic="true">
         {#if findQuery.trim()}
-          {findMatches.length > 0 ? `${findCurrentMatch + 1} / ${findMatches.length}` : "No results"}
+          {#if findMatches.length > 0}
+            {findCurrentMatch + 1} / {findMatches.length}
+          {:else}
+            No results
+          {/if}
         {/if}
       </span>
-      <button onclick={prevMatch} disabled={findMatches.length === 0} title="Previous (Shift+Enter)">↑</button>
-      <button onclick={nextMatch} disabled={findMatches.length === 0} title="Next (Enter)">↓</button>
-      <button onclick={closeFindBar} title="Close (Escape)">✕</button>
+      <button onclick={prevMatch} disabled={findMatches.length === 0} title="Previous (Shift+Enter)" aria-label="Previous match">↑</button>
+      <button onclick={nextMatch} disabled={findMatches.length === 0} title="Next (Enter)" aria-label="Next match">↓</button>
+      <button onclick={closeFindBar} title="Close (Escape)" aria-label="Close find bar">✕</button>
     </div>
   {/if}
 
   <!-- ── Main content ── -->
   <div class="content-row">
-    <!-- Pages -->
-    <div class="pages-area" bind:this={container} onwheel={onWheel} role="document" tabindex="-1">
+    <!-- Pages scroll area -->
+    <div
+      class="pages-area"
+      bind:this={container}
+      onwheel={onWheel}
+      role="document"
+      tabindex="-1"
+    >
       {#if loadingPages}
         <div class="center-msg">Loading…</div>
       {:else if vstore.pageSizes.length === 0}
@@ -439,9 +526,11 @@
       {:else}
         <div class="pages-list">
           {#each vstore.pageSizes as size, i}
+            {@const pageMatches = pageHighlights.get(i)}
+            {@const activeIdx = activeByPage.get(i) ?? -1}
             <div class="page-entry" data-page-index={i}>
               <Page
-                docId={docId}
+                {docId}
                 pageIndex={i}
                 width={size.width}
                 height={size.height}
@@ -449,8 +538,8 @@
                 visible={visibleSet.has(i)}
                 rotation={vstore.rotation}
                 textSpans={textSpansByPage[i]}
-                highlights={pageHighlights.get(i)}
-                activeHighlight={activeByPage.get(i) ?? -1}
+                highlights={pageMatches}
+                activeHighlight={activeIdx}
                 annotations={annotsByPage[i]}
                 annotationsVersion={annotsVersionByPage[i] ?? 0}
                 formFields={formFieldsByPage[i]}
@@ -462,8 +551,9 @@
                 onDeleteAnnotation={(idx) => handleDeleteAnnotation(i, idx)}
                 onFieldText={(annotIdx, val) => handleFieldText(i, annotIdx, val)}
                 onFieldChecked={(annotIdx, val) => handleFieldChecked(i, annotIdx, val)}
+                onPushButton={() => handlePushButton(i)}
                 inkColor={toolColor}
-                inkWidth={inkWidth}
+                {inkWidth}
               />
               <span class="page-label" aria-hidden="true">{i + 1}</span>
             </div>
@@ -472,29 +562,29 @@
       {/if}
     </div>
 
-    <!-- Sidebar -->
+    <!-- Annotations sidebar -->
     {#if sidebarOpen}
       <aside class="sidebar" aria-label="Annotations">
         <div class="sidebar-header">
           <span>Comments</span>
-          <button onclick={() => sidebarOpen = false} aria-label="Close sidebar">✕</button>
+          <button onclick={() => { sidebarOpen = false; }} aria-label="Close sidebar">✕</button>
         </div>
         <div class="sidebar-list">
           {#if allAnnotations.length === 0}
             <p class="sidebar-empty">No annotations yet.</p>
           {:else}
             {#each allAnnotations as { pageIndex, annot }}
-              <div class="sidebar-item" role="button" tabindex="0"
-                onclick={() => scrollToAnnotation(pageIndex)}
-                onkeydown={(e) => { if (e.key === "Enter") scrollToAnnotation(pageIndex); }}>
+              <div
+                class="sidebar-item"
+                role="button"
+                tabindex="0"
+                onclick={() => scrollToPage(pageIndex)}
+                onkeydown={(e) => { if (e.key === "Enter") scrollToPage(pageIndex); }}
+              >
                 <span class="sidebar-kind">{annot.kind}</span>
                 <span class="sidebar-page">p.{pageIndex + 1}</span>
-                {#if annot.contents}
-                  <p class="sidebar-text">{annot.contents}</p>
-                {/if}
-                {#if annot.author}
-                  <p class="sidebar-author">{annot.author}</p>
-                {/if}
+                {#if annot.contents}<p class="sidebar-text">{annot.contents}</p>{/if}
+                {#if annot.author}<p class="sidebar-author">{annot.author}</p>{/if}
               </div>
             {/each}
           {/if}
@@ -507,30 +597,22 @@
 <!-- Signature capture modal -->
 {#if signOpen}
   <SignatureCapture
-    onClose={() => signOpen = false}
+    onClose={() => { signOpen = false; }}
     onPlace={async (paths) => {
       signOpen = false;
       const currentPage = vstore.currentPage;
       if (paths.length === 0) return;
-
-      // The signature paths come back normalized to the modal's drawing canvas
-      // (480×200, ~2.4:1). Map them into a target rectangle on the current
-      // page so the signature appears as a sensible-sized stamp instead of
-      // being stretched edge-to-edge. Target: 30% of page width near the
-      // bottom-right corner, preserving the modal canvas aspect ratio.
-      const sigAspect = 480 / 200; // width / height
+      const sigAspect = 480 / 200;
       const targetW = 0.30;
-      const targetH = targetW / sigAspect; // ≈ 0.125
+      const targetH = targetW / sigAspect;
       const targetLeft = 0.65;
-      const targetTop = 0.85 - targetH; // bottom-aligned ~15% from bottom
-
+      const targetTop = 0.85 - targetH;
       const placedPaths = paths.map((path) =>
         path.map<[number, number]>(([nx, ny]) => [
           targetLeft + nx * targetW,
           targetTop + ny * targetH,
         ]),
       );
-
       await addInkAnnotation(docId, currentPage, placedPaths, [0, 0, 0], 2);
       tabs.markDirty(tab.id, true);
       await refreshAnnotations(currentPage);
@@ -541,63 +623,98 @@
 <style>
   .viewer { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 
-  /* Toolbar */
+  /* ── Toolbar ── */
   .toolbar {
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
     gap: 8px;
-    padding: 6px 12px;
+    padding: 5px 12px;
     background: var(--bg-elev);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     min-height: 40px;
   }
+
   .toolbar-left { overflow: hidden; }
   .toolbar-center { display: flex; align-items: center; justify-content: center; }
-  .toolbar-right { display: flex; align-items: center; gap: 3px; justify-content: flex-end; flex-wrap: nowrap; }
-  .doc-title { font-size: 13px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
-  .page-nav { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-muted); }
-  .page-nav label { display: flex; align-items: center; gap: 4px; }
-  .page-nav input {
-    width: 44px; padding: 3px 6px; border: 1px solid var(--border);
-    border-radius: var(--radius); background: var(--bg); color: var(--fg);
-    text-align: center; font: inherit; font-size: 13px;
+  .toolbar-right {
+    display: flex; align-items: center; gap: 3px;
+    justify-content: flex-end; flex-wrap: nowrap;
   }
+
+  .doc-title {
+    font-size: 13px; color: var(--fg-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;
+  }
+
+  /* Page nav */
+  .page-nav { display: flex; align-items: center; gap: 5px; font-size: 13px; }
+  .page-label-text { color: var(--fg-muted); }
+  .page-nav input {
+    width: 44px; padding: 3px 6px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg); color: var(--fg);
+    text-align: center; font: inherit; font-size: 13px; outline: none;
+    cursor: text;
+  }
+  .page-nav input:focus { border-color: var(--accent); }
+  .page-total { color: var(--fg-muted); }
+
+  /* Toolbar buttons */
   .toolbar-right button {
     background: transparent; border: 1px solid var(--border); border-radius: var(--radius);
     padding: 3px 7px; cursor: pointer; font-size: 13px; color: var(--fg-muted);
     line-height: 1; min-width: 26px; white-space: nowrap; flex-shrink: 0;
+    transition: background 80ms, color 80ms;
   }
   .toolbar-right button:hover { background: var(--bg-chrome); color: var(--fg); }
   .toolbar-right button:disabled { opacity: 0.4; cursor: default; }
   .toolbar-right button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
   .toolbar-right .save-btn { border-color: var(--accent); color: var(--accent); }
-  .zoom-pct { font-size: 13px; color: var(--fg-muted); min-width: 38px; text-align: center; }
+
+  /* Zoom % button — doubles as fit-width shortcut */
+  .zoom-pct-btn {
+    min-width: 48px; text-align: center; font-variant-numeric: tabular-nums;
+    font-size: 13px;
+  }
+
   .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+
   .color-pick {
     width: 24px; height: 24px; border: 1px solid var(--border); border-radius: var(--radius);
     padding: 1px; cursor: pointer; background: none; flex-shrink: 0;
   }
 
-  /* XFA warning */
+  /* ── XFA banner ── */
   .xfa-banner {
     padding: 6px 16px; font-size: 12px; flex-shrink: 0;
     background: #fff3cd; color: #664d03; border-bottom: 1px solid #ffc107;
   }
 
-  /* Find bar */
+  /* ── Find bar ── */
   .find-bar {
-    display: flex; align-items: center; gap: 4px; padding: 5px 12px;
-    background: var(--bg-elev); border-bottom: 1px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; gap: 4px;
+    padding: 5px 12px; background: var(--bg-elev);
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
   }
+
   .find-bar input[type="search"] {
-    flex: 1; max-width: 280px; padding: 4px 8px; border: 1px solid var(--border);
-    border-radius: var(--radius); background: var(--bg); color: var(--fg);
+    flex: 1; max-width: 280px; padding: 4px 8px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg); color: var(--fg);
     font: inherit; font-size: 13px; outline: none;
+    transition: border-color 80ms;
   }
   .find-bar input[type="search"]:focus { border-color: var(--accent); }
-  .find-count { font-size: 12px; color: var(--fg-muted); min-width: 72px; white-space: nowrap; }
+  .find-bar input.no-results { border-color: var(--danger); color: var(--danger); }
+  .find-bar input[type="search"]::-webkit-search-cancel-button { display: none; }
+
+  .find-count {
+    font-size: 12px; color: var(--fg-muted);
+    min-width: 72px; white-space: nowrap; text-align: center;
+  }
+
   .find-bar button {
     background: transparent; border: 1px solid var(--border); border-radius: var(--radius);
     padding: 4px 8px; cursor: pointer; font-size: 13px; color: var(--fg-muted); line-height: 1;
@@ -605,42 +722,59 @@
   .find-bar button:hover:not(:disabled) { background: var(--bg-chrome); color: var(--fg); }
   .find-bar button:disabled { opacity: 0.4; cursor: default; }
 
-  /* Content layout */
+  /* ── Content layout ── */
   .content-row { flex: 1; display: flex; overflow: hidden; }
   .pages-area { flex: 1; overflow: auto; background: var(--bg); outline: none; }
+
   .pages-list {
     display: flex; flex-direction: column; align-items: center;
-    gap: 16px; padding: 24px 24px 48px;
+    gap: 8px;            /* 8px gap between pages */
+    padding: 16px 16px 48px;
   }
-  .page-entry { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; }
-  .page-label { font-size: 11px; color: var(--fg-muted); opacity: 0.6; user-select: none; }
+
+  .page-entry {
+    position: relative; display: flex;
+    flex-direction: column; align-items: center; gap: 4px;
+  }
+
+  .page-label { font-size: 11px; color: var(--fg-muted); opacity: 0.55; user-select: none; }
+
   .center-msg {
     display: flex; align-items: center; justify-content: center;
     height: 100%; min-height: 200px; color: var(--fg-muted); font-size: 14px;
   }
 
-  /* Sidebar */
+  /* ── Sidebar ── */
   .sidebar {
-    width: 260px; flex-shrink: 0; border-left: 1px solid var(--border);
+    width: 256px; flex-shrink: 0; border-left: 1px solid var(--border);
     background: var(--bg-elev); display: flex; flex-direction: column; overflow: hidden;
   }
+
   .sidebar-header {
     display: flex; justify-content: space-between; align-items: center;
     padding: 10px 12px; border-bottom: 1px solid var(--border);
     font-size: 13px; font-weight: 500;
   }
+
   .sidebar-header button {
-    background: none; border: none; cursor: pointer; font-size: 14px; color: var(--fg-muted); padding: 2px;
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; color: var(--fg-muted); padding: 2px;
   }
   .sidebar-header button:hover { color: var(--fg); }
+
   .sidebar-list { flex: 1; overflow-y: auto; padding: 8px; }
   .sidebar-empty { color: var(--fg-muted); font-size: 13px; text-align: center; padding: 24px 0; }
+
   .sidebar-item {
-    padding: 8px 10px; border-radius: var(--radius); cursor: pointer; margin-bottom: 4px;
-    border: 1px solid var(--border); background: var(--bg);
+    padding: 8px 10px; border-radius: var(--radius); cursor: pointer;
+    margin-bottom: 4px; border: 1px solid var(--border); background: var(--bg);
+    transition: border-color 80ms;
   }
   .sidebar-item:hover { border-color: var(--accent); }
-  .sidebar-kind { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--accent); }
+
+  .sidebar-kind {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--accent);
+  }
   .sidebar-page { float: right; font-size: 11px; color: var(--fg-muted); }
   .sidebar-text { font-size: 12px; margin: 4px 0 0; color: var(--fg); }
   .sidebar-author { font-size: 11px; color: var(--fg-muted); margin: 2px 0 0; }

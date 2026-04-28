@@ -42,8 +42,8 @@ fn main() {
             commands::open_document,
             commands::close_document,
             commands::pending_open_files,
-            // page rendering (IPC-based, works in dev + prod)
-            commands::render_page_b64,
+            // page rendering — raw RGBA pixels via binary IPC (no image codec)
+            commands::render_page_pixels,
             commands::render_thumb_b64,
             // page data
             commands::get_page_sizes,
@@ -53,6 +53,7 @@ fn main() {
             commands::get_form_fields,
             commands::set_field_text_value,
             commands::set_field_checked,
+            commands::reset_form_fields,
             // annotations
             commands::get_page_annotations,
             commands::add_highlight_annotation,

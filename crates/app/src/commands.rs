@@ -63,26 +63,37 @@ pub fn pending_open_files(state: State<AppState>) -> Vec<String> {
 
 // ── Page rendering (IPC) ──────────────────────────────────────────────────────
 
-/// Render one page to a base64-encoded JPEG and return it as a data URL.
-/// Used instead of the `pdf://` custom scheme, which WebView2 blocks when
-/// the frontend is served from an HTTP dev URL.
+/// Render one page and return raw RGBA pixels as a binary IPC response.
+///
+/// Response body layout (little-endian):
+///   bytes 0–3  : u32  pixel width
+///   bytes 4–7  : u32  pixel height
+///   bytes 8+   : width × height × 4 bytes of RGBA (alpha=255 everywhere)
+///
+/// The frontend receives this as an `ArrayBuffer` and paints it with
+/// `ctx.putImageData()` on a `<canvas>`.  No image codec is involved, so
+/// there is no JPEG/PNG encoding loss and no transparency-group blackout.
 #[tauri::command]
-pub fn render_page_b64(
+pub fn render_page_pixels(
     id: String,
     page_index: u32,
     scale: f32,
     state: State<AppState>,
-) -> Result<String, String> {
-    use base64::Engine;
-    let bytes = with_doc(&id, &state, |doc| {
-        doc.render_page_jpeg(pdf_core::RenderRequest { page_index, scale })
+) -> Result<tauri::ipc::Response, String> {
+    let raw = with_doc(&id, &state, |doc| {
+        doc.render_page_raw(pdf_core::RenderRequest { page_index, scale })
             .map_err(|e| e.to_string())
     })?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+
+    let mut buf = Vec::with_capacity(8 + raw.rgba.len());
+    buf.extend_from_slice(&raw.width.to_le_bytes());
+    buf.extend_from_slice(&raw.height.to_le_bytes());
+    buf.extend_from_slice(&raw.rgba);
+    Ok(tauri::ipc::Response::new(buf))
 }
 
 /// Render page 0 of an on-disk PDF at thumbnail size, returned as a data URL.
-/// Replaces the `thumb://` custom scheme for the same reason as above.
+/// Thumbnails are small enough that JPEG+base64 is fine here.
 #[tauri::command]
 pub fn render_thumb_b64(path: String, max_w: f32, state: State<AppState>) -> Result<String, String> {
     use base64::Engine;
@@ -305,6 +316,17 @@ pub fn set_field_checked(
     with_doc(&id, &state, |doc| {
         doc.set_field_checked(page_index, annot_index, checked)
             .map_err(|e| e.to_string())
+    })
+}
+
+#[tauri::command]
+pub fn reset_form_fields(
+    id: String,
+    page_index: u32,
+    state: State<AppState>,
+) -> Result<(), String> {
+    with_doc(&id, &state, |doc| {
+        doc.reset_form_fields(page_index).map_err(|e| e.to_string())
     })
 }
 

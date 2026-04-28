@@ -77,16 +77,32 @@ export async function getPageTextSpans(id: string, pageIndex: number): Promise<T
 }
 
 /**
- * Render a page to a PNG and return it as a base64 data URL.
- * Uses IPC instead of a custom URI scheme so it works in both dev and prod.
+ * Render one page and return raw RGBA pixel data via binary IPC.
+ *
+ * The Rust command packs: 4 bytes width (u32 LE) + 4 bytes height (u32 LE)
+ * + width×height×4 bytes of RGBA with alpha=255 everywhere.
+ *
+ * Returns an object ready for `new ImageData(data, width, height)` and
+ * `ctx.putImageData(imageData, 0, 0)`.  No image codec, no base64, no
+ * transparency-group blackout.
  */
-export async function renderPageB64(
+export async function renderPagePixels(
   docId: string,
   pageIndex: number,
   scale: number,
-): Promise<string> {
-  const b64 = await invoke<string>("render_page_b64", { id: docId, pageIndex, scale });
-  return `data:image/jpeg;base64,${b64}`;
+): Promise<{ width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> }> {
+  // Tauri binary IPC returns a plain ArrayBuffer (never SharedArrayBuffer).
+  const buf = await invoke<ArrayBuffer>("render_page_pixels", {
+    id: docId,
+    pageIndex,
+    scale,
+  });
+  const ab = buf as ArrayBuffer;
+  const view = new DataView(ab);
+  const width = view.getUint32(0, true);
+  const height = view.getUint32(4, true);
+  const data = new Uint8ClampedArray(ab, 8, width * height * 4);
+  return { width, height, data };
 }
 
 /**
@@ -136,6 +152,10 @@ export async function setFieldChecked(
   checked: boolean,
 ): Promise<void> {
   return invoke("set_field_checked", { id, pageIndex, annotIndex, checked });
+}
+
+export async function resetFormFields(id: string, pageIndex: number): Promise<void> {
+  return invoke("reset_form_fields", { id, pageIndex });
 }
 
 // ── Annotations ───────────────────────────────────────────────────────────────

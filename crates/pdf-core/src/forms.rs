@@ -160,6 +160,40 @@ impl Document {
         })
     }
 
+    /// Reset all text and checkbox fields on a page to empty/unchecked.
+    ///
+    /// Called when the frontend detects a push-button click (most push buttons
+    /// in interactive PDFs are Reset or Submit buttons; we handle the reset case
+    /// here and ignore submit since that requires network I/O outside scope).
+    pub fn reset_form_fields(&self, page_index: u32) -> PdfResult<()> {
+        self.with_doc(|doc| {
+            let pages = doc.pages();
+            if page_index >= pages.len() as u32 {
+                return Err(PdfError::InvalidPage(page_index));
+            }
+            let page = pages
+                .get(page_index as u16)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            let annots = page.annotations();
+            let count = annots.len();
+            for i in 0..count {
+                let mut annot = match annots.get(i) {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                };
+                if let Some(field) = annot.as_form_field_mut() {
+                    match field {
+                        PdfFormField::Text(t) => { let _ = t.set_value(""); }
+                        PdfFormField::Checkbox(cb) => { let _ = cb.set_checked(false); }
+                        _ => {}
+                    }
+                }
+            }
+            drop(page);
+            Ok(())
+        })
+    }
+
     /// Toggle a checkbox field.
     pub fn set_field_checked(
         &self,
