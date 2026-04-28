@@ -10,16 +10,10 @@ pub use forms::FormField;
 pub use render::{PageSize, RenderRequest};
 pub use text::TextSpan;
 
-use lru::LruCache;
 use parking_lot::Mutex;
 use pdfium_render::prelude::*;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-/// How many (page, scale_bucket) JPEG renders to keep in the per-document cache.
-/// At A4 / zoom=1 / dpr=1.5 a single JPEG is ~80–150 KB, so 50 entries ≈ 7 MB.
-const RENDER_CACHE_CAPACITY: usize = 50;
 
 pub struct PdfEngine {
     // Stored in Arc so it outlives all Documents that borrow from it.
@@ -50,9 +44,6 @@ impl PdfEngine {
             path: path.to_path_buf(),
             inner: Arc::new(Mutex::new(doc_static)),
             page_count,
-            render_cache: Arc::new(Mutex::new(
-                LruCache::new(NonZeroUsize::new(RENDER_CACHE_CAPACITY).unwrap()),
-            )),
         })
     }
 }
@@ -61,9 +52,6 @@ pub struct Document {
     pub path: PathBuf,
     pub page_count: u32,
     pub(crate) inner: Arc<Mutex<PdfDocument<'static>>>,
-    /// LRU cache of JPEG-encoded page renders, keyed by (page_index, scale_bucket).
-    /// scale_bucket = (scale * 100).round() so 1.50 and 1.501 share a slot.
-    pub(crate) render_cache: Arc<Mutex<LruCache<(u32, u32), Vec<u8>>>>,
 }
 
 // SAFETY: all PDFium access is serialised through the Mutex.

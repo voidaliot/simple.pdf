@@ -78,6 +78,14 @@
 
   // ── Annotations ─────────────────────────────────────────────────────────────
   let annotsByPage = $state<(Annotation[] | undefined)[]>([]);
+  // Per-page version counter — bumped after every mutation. The Page
+  // component depends on this in its render $effect so PDFium re-rasterises
+  // the page (it bakes annotations into the bitmap) whenever annotations change.
+  let annotsVersionByPage = $state<number[]>([]);
+
+  function bumpAnnotsVersion(pageIndex: number) {
+    annotsVersionByPage[pageIndex] = (annotsVersionByPage[pageIndex] ?? 0) + 1;
+  }
 
   async function loadAnnotations(pageIndex: number) {
     try { annotsByPage[pageIndex] = await getPageAnnotations(docId, pageIndex); }
@@ -86,6 +94,7 @@
 
   async function refreshAnnotations(pageIndex: number) {
     annotsByPage[pageIndex] = await getPageAnnotations(docId, pageIndex).catch(() => []);
+    bumpAnnotsVersion(pageIndex);
   }
 
   $effect(() => { for (const idx of visibleSet) {
@@ -263,10 +272,10 @@
           const idx = Number((entry.target as HTMLElement).dataset.pageIndex);
           if (entry.isIntersecting) {
             next.add(idx);
-            for (let d = 1; d <= 2; d++) {
-              if (idx - d >= 0) next.add(idx - d);
-              if (idx + d < pages.length) next.add(idx + d);
-            }
+            // ±1 page prefetch — wider ranges pile up too many concurrent
+            // IPC calls on the doc mutex and freeze the UI on fast scroll.
+            if (idx > 0) next.add(idx - 1);
+            if (idx < pages.length - 1) next.add(idx + 1);
           }
         }
         visibleSet = next;
@@ -443,6 +452,7 @@
                 highlights={pageHighlights.get(i)}
                 activeHighlight={activeByPage.get(i) ?? -1}
                 annotations={annotsByPage[i]}
+                annotationsVersion={annotsVersionByPage[i] ?? 0}
                 formFields={formFieldsByPage[i]}
                 xfaReadOnly={formType === "xfa_full" || formType === "xfa_foreground"}
                 activeTool={activeTool}
@@ -501,11 +511,29 @@
     onPlace={async (paths) => {
       signOpen = false;
       const currentPage = vstore.currentPage;
-      if (paths.length > 0) {
-        await addInkAnnotation(docId, currentPage, paths, [0, 0, 0], 2);
-        tabs.markDirty(tab.id, true);
-        await refreshAnnotations(currentPage);
-      }
+      if (paths.length === 0) return;
+
+      // The signature paths come back normalized to the modal's drawing canvas
+      // (480×200, ~2.4:1). Map them into a target rectangle on the current
+      // page so the signature appears as a sensible-sized stamp instead of
+      // being stretched edge-to-edge. Target: 30% of page width near the
+      // bottom-right corner, preserving the modal canvas aspect ratio.
+      const sigAspect = 480 / 200; // width / height
+      const targetW = 0.30;
+      const targetH = targetW / sigAspect; // ≈ 0.125
+      const targetLeft = 0.65;
+      const targetTop = 0.85 - targetH; // bottom-aligned ~15% from bottom
+
+      const placedPaths = paths.map((path) =>
+        path.map<[number, number]>(([nx, ny]) => [
+          targetLeft + nx * targetW,
+          targetTop + ny * targetH,
+        ]),
+      );
+
+      await addInkAnnotation(docId, currentPage, placedPaths, [0, 0, 0], 2);
+      tabs.markDirty(tab.id, true);
+      await refreshAnnotations(currentPage);
     }}
   />
 {/if}

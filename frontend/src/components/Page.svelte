@@ -22,6 +22,10 @@
     highlights?: Highlight[];
     activeHighlight?: number;
     annotations?: Annotation[];
+    /** Bump this number whenever annotations change to force a page re-render —
+     *  PDFium draws annotations into the page bitmap, so the bitmap is stale
+     *  after any annotation mutation (add/remove/undo, signature placement). */
+    annotationsVersion?: number;
     formFields?: FormField[];
     xfaReadOnly?: boolean;
     activeTool?: AnnotTool;
@@ -40,6 +44,7 @@
     rotation = 0,
     textSpans, highlights, activeHighlight = -1,
     annotations,
+    annotationsVersion = 0,
     formFields,
     xfaReadOnly = false,
     activeTool = "none",
@@ -77,6 +82,10 @@
     const id = docId;
     const idx = pageIndex;
     const scale = renderScale;
+    // Touch annotationsVersion so the effect re-fires when annotations change.
+    // PDFium draws annotations into the page bitmap, so the bitmap is stale
+    // any time we add/remove/undo an annotation or place a signature.
+    void annotationsVersion;
     let cancelled = false;
 
     renderPageB64(id, idx, scale)
@@ -137,7 +146,12 @@
     if (!inkCanvas) return;
     const ctx = inkCanvas.getContext("2d");
     if (!ctx) return;
+    // clearRect operates in canvas-buffer coords (device pixels), pre-transform.
     ctx.clearRect(0, 0, inkCanvas.width, inkCanvas.height);
+    // Subsequent drawing uses CSS pixel coords because ctx.scale(dpr,dpr) was
+    // applied when the canvas was sized. So multiply normalized coords by
+    // cssW/cssH (NOT inkCanvas.width/height — those are device pixels and
+    // would double-scale by dpr, producing a ~dpr×offset from the cursor).
     const draw = (paths: [number, number][][], color: string, lw: number) => {
       ctx.strokeStyle = color;
       ctx.lineWidth = lw;
@@ -146,9 +160,9 @@
       for (const path of paths) {
         if (path.length < 2) continue;
         ctx.beginPath();
-        ctx.moveTo(path[0]![0] * inkCanvas!.width, path[0]![1] * inkCanvas!.height);
+        ctx.moveTo(path[0]![0] * cssW, path[0]![1] * cssH);
         for (let i = 1; i < path.length; i++) {
-          ctx.lineTo(path[i]![0] * inkCanvas!.width, path[i]![1] * inkCanvas!.height);
+          ctx.lineTo(path[i]![0] * cssW, path[i]![1] * cssH);
         }
         ctx.stroke();
       }
@@ -159,7 +173,8 @@
   }
 
   $effect(() => {
-    // resize canvas when cssW/cssH change
+    // resize canvas when cssW/cssH change. Setting .width/.height resets the
+    // 2D context state, so we must re-apply the dpr scale every time.
     if (!inkCanvas) return;
     inkCanvas.width = cssW * dpr;
     inkCanvas.height = cssH * dpr;
