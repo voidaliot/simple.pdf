@@ -54,6 +54,7 @@ fn main() {
             commands::set_field_text_value,
             commands::set_field_checked,
             commands::reset_form_fields,
+            commands::reset_all_form_fields,
             // annotations
             commands::get_page_annotations,
             commands::add_highlight_annotation,

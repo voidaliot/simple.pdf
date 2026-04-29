@@ -17,6 +17,9 @@ pub struct FormField {
     /// True for multiline text fields.
     pub multiline: bool,
     pub rect: AnnRect,
+    /// For push buttons: "reset" | "submit" | "other". Always "none" for non-button fields.
+    /// Detected via field-name heuristic (PDF action dict requires raw FFI, deferred).
+    pub action_type: String,
 }
 
 impl Document {
@@ -113,6 +116,12 @@ impl Document {
                     _ => (String::new(), false, false, vec![]),
                 };
 
+                let action_type = if kind == "push" {
+                    classify_button_action(&name).to_string()
+                } else {
+                    "none".to_string()
+                };
+
                 let rect = annot
                     .bounds()
                     .map(|b| pdf_to_screen(&b, pw, ph))
@@ -127,6 +136,7 @@ impl Document {
                     multiline,
                     options,
                     rect,
+                    action_type,
                 });
             }
             Ok(fields)
@@ -160,11 +170,7 @@ impl Document {
         })
     }
 
-    /// Reset all text and checkbox fields on a page to empty/unchecked.
-    ///
-    /// Called when the frontend detects a push-button click (most push buttons
-    /// in interactive PDFs are Reset or Submit buttons; we handle the reset case
-    /// here and ignore submit since that requires network I/O outside scope).
+    /// Reset all text and checkbox fields on a single page.
     pub fn reset_form_fields(&self, page_index: u32) -> PdfResult<()> {
         self.with_doc(|doc| {
             let pages = doc.pages();
@@ -174,22 +180,29 @@ impl Document {
             let page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
-            let annots = page.annotations();
-            let count = annots.len();
-            for i in 0..count {
-                let mut annot = match annots.get(i) {
-                    Ok(a) => a,
+            reset_page_fields(&page);
+            drop(page);
+            Ok(())
+        })
+    }
+
+    /// Reset all text and checkbox fields across every page in the document.
+    ///
+    /// This matches the PDF ResetForm action semantics when no field list is
+    /// provided: all interactive fields revert to their default (empty/unchecked).
+    /// Submit actions and print buttons are intentionally excluded from this path.
+    pub fn reset_all_form_fields(&self) -> PdfResult<()> {
+        self.with_doc(|doc| {
+            let pages = doc.pages();
+            let page_count = pages.len();
+            for pi in 0..page_count {
+                let page = match pages.get(pi as u16) {
+                    Ok(p) => p,
                     Err(_) => continue,
                 };
-                if let Some(field) = annot.as_form_field_mut() {
-                    match field {
-                        PdfFormField::Text(t) => { let _ = t.set_value(""); }
-                        PdfFormField::Checkbox(cb) => { let _ = cb.set_checked(false); }
-                        _ => {}
-                    }
-                }
+                reset_page_fields(&page);
+                drop(page);
             }
-            drop(page);
             Ok(())
         })
     }
@@ -220,6 +233,41 @@ impl Document {
             Ok(())
         })
     }
+}
+
+fn reset_page_fields(page: &pdfium_render::prelude::PdfPage<'_>) {
+    let annots = page.annotations();
+    let count = annots.len();
+    for i in 0..count {
+        let mut annot = match annots.get(i) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        if let Some(field) = annot.as_form_field_mut() {
+            match field {
+                PdfFormField::Text(t) => { let _ = t.set_value(""); }
+                PdfFormField::Checkbox(cb) => { let _ = cb.set_checked(false); }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Classify a push button's likely action from its field name.
+///
+/// PDF action dicts require raw FFI to inspect; this heuristic covers the
+/// common case where the designer used a descriptive field name.  Defaults to
+/// "reset" when the name is ambiguous, because reset is reversible (the user
+/// can re-fill) whereas silently treating a reset as a submit would be wrong.
+fn classify_button_action(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    let is_submit = ["submit", "send", "envoyer", "einreichen", "enviar", "invia"]
+        .iter().any(|kw| lower.contains(kw));
+    let is_print = ["print", "drucken", "imprimer", "imprimir"]
+        .iter().any(|kw| lower.contains(kw));
+    if is_submit { "submit" }
+    else if is_print { "other" }
+    else { "reset" }
 }
 
 fn pdf_to_screen(r: &PdfRect, pw: f32, ph: f32) -> AnnRect {

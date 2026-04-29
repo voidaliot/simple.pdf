@@ -126,6 +126,8 @@ export interface FormField {
   checked: boolean;
   multiline: boolean;
   rect: AnnRect;
+  /** For push buttons: "reset" | "submit" | "other". "none" for non-button fields. */
+  action_type: string;
 }
 
 export async function getFormType(id: string): Promise<string> {
@@ -156,6 +158,10 @@ export async function setFieldChecked(
 
 export async function resetFormFields(id: string, pageIndex: number): Promise<void> {
   return invoke("reset_form_fields", { id, pageIndex });
+}
+
+export async function resetAllFormFields(id: string): Promise<void> {
+  return invoke("reset_all_form_fields", { id });
 }
 
 // ── Annotations ───────────────────────────────────────────────────────────────

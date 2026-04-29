@@ -44,7 +44,7 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 - [x] **FR-FORM-01** — Detect AcroForm fields and render interactive inputs over them for: text, multi-line text, checkbox, radio, combobox (dropdown), listbox, push button.
 - [x] **FR-FORM-02** — On save, field values persist in the PDF and regenerated appearances are written so other readers display the filled form.
 - [x] **FR-FORM-03** — Detect XFA-only forms (via `/XFA` in the catalog) and show a non-blocking banner: "This is an XFA form — some fields may not render. Open in Adobe Reader for full fidelity."
-- [ ] **FR-FORM-04** — Respect form reset action buttons when the PDF defines them.
+- [x] **FR-FORM-04** — Respect form reset action buttons when the PDF defines them.
 
 ## 5. Functional — Signing (FR-SIGN)
 

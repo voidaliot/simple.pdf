@@ -330,6 +330,13 @@ pub fn reset_form_fields(
     })
 }
 
+#[tauri::command]
+pub fn reset_all_form_fields(id: String, state: State<AppState>) -> Result<(), String> {
+    with_doc(&id, &state, |doc| {
+        doc.reset_all_form_fields().map_err(|e| e.to_string())
+    })
+}
+
 // ── Save ──────────────────────────────────────────────────────────────────────
 
 #[tauri::command]

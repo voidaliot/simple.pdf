@@ -19,7 +19,7 @@
     getFormFields,
     setFieldTextValue,
     setFieldChecked,
-    resetFormFields,
+    resetAllFormFields,
     type TextSpan,
     type Annotation,
     type AnnRect,
@@ -77,10 +77,19 @@
     tabs.markDirty(tab.id, true);
   }
 
-  async function handlePushButton(pageIndex: number) {
-    await resetFormFields(docId, pageIndex).catch(console.error);
-    formFieldsByPage[pageIndex] = undefined;
-    await loadFormFields(pageIndex);
+  async function handlePushButton(pageIndex: number, actionType: string) {
+    if (actionType === "submit") {
+      alert("Form submission is not supported — please fill and save the PDF, then submit it using your browser or email client.");
+      return;
+    }
+    if (actionType === "other") return; // print or unknown non-reset action
+
+    // Reset action: clear all fields in the document (not just the current page),
+    // matching PDF ResetForm semantics when no field-inclusion list is specified.
+    await resetAllFormFields(docId).catch(console.error);
+    // Invalidate the form-fields cache for every page that was already loaded.
+    formFieldsByPage = formFieldsByPage.map(() => undefined);
+    for (const idx of visibleSet) await loadFormFields(idx);
     tabs.markDirty(tab.id, true);
   }
 
@@ -551,7 +560,10 @@
                 onDeleteAnnotation={(idx) => handleDeleteAnnotation(i, idx)}
                 onFieldText={(annotIdx, val) => handleFieldText(i, annotIdx, val)}
                 onFieldChecked={(annotIdx, val) => handleFieldChecked(i, annotIdx, val)}
-                onPushButton={() => handlePushButton(i)}
+                onPushButton={(annotIdx) => {
+                    const field = formFieldsByPage[i]?.find(f => f.index === annotIdx);
+                    handlePushButton(i, field?.action_type ?? "reset");
+                  }}
                 inkColor={toolColor}
                 {inkWidth}
               />
