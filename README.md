@@ -2,9 +2,12 @@
 
 A fast, small-footprint, modern PDF reader for Windows with annotations, AcroForms, and drawn-signature support.
 
+<img width="1201" height="1550" alt="image" src="https://github.com/user-attachments/assets/b75c0cf1-97a9-42d9-9064-2d1370788953" />
+
+
 ## Status
 
-Early development. See [plan.md](plan.md) for milestone progress and [requirements.md](requirements.md) for the full requirement list.
+Wirking first version available.
 
 ## Design goals
 
@@ -40,4 +43,4 @@ tests/
 
 ## License
 
-TBD — will be permissive (MIT or Apache-2.0). PDFium ships under BSD-3-Clause.
+MIT
