@@ -51,8 +51,26 @@ impl Document {
                     .bounds()
                     .map(|b| pdf_to_screen(&b, pw, ph))
                     .unwrap_or(AnnRect { left: 0.0, top: 0.0, width: 0.05, height: 0.05 });
-                let color = annot
-                    .fill_color()
+                // pdfium-render 0.8.37's annotation color fallback casts an
+                // annotation handle to a page-object handle when an appearance
+                // stream exists. Read the real appearance object first to avoid
+                // that invalid native call (and to report its actual color).
+                let annotation_color = match annot.objects().get(0) {
+                    Ok(object) => match kind.as_str() {
+                        "highlight" => object.fill_color().or_else(|_| object.stroke_color()),
+                        "underline" | "squiggly" | "strikeout" | "ink" => {
+                            object.stroke_color().or_else(|_| object.fill_color())
+                        }
+                        _ => object.fill_color().or_else(|_| object.stroke_color()),
+                    },
+                    Err(_) => match kind.as_str() {
+                        "highlight" | "underline" | "squiggly" | "strikeout" | "ink" => {
+                            annot.stroke_color()
+                        }
+                        _ => annot.fill_color(),
+                    },
+                };
+                let color = annotation_color
                     .map(|c| [c.red(), c.green(), c.blue(), c.alpha()])
                     .unwrap_or([255, 214, 0, 128]);
                 let contents = annot.contents();
@@ -164,8 +182,8 @@ impl Document {
             let rect = PdfRect::new(
                 PdfPoints::new((1.0 - top - 0.04) * ph),
                 PdfPoints::new(left * pw),
-                PdfPoints::new((left + 0.03) * pw),
                 PdfPoints::new((1.0 - top) * ph),
+                PdfPoints::new((left + 0.03) * pw),
             );
 
             let title = author.unwrap_or("Note");
@@ -193,27 +211,54 @@ impl Document {
         page_index: u32,
         paths: &[Vec<[f32; 2]>],
         color: [u8; 3],
-        _width: f32,
+        width: f32,
     ) -> PdfResult<u32> {
         self.with_doc(|doc| {
             let pages = doc.pages();
             let mut page = pages
                 .get(page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
+            page.set_content_regeneration_strategy(PdfPageContentRegenerationStrategy::Manual);
             let (pw, ph) = page_dims(&page);
+
+            let paths: Vec<&[[f32; 2]]> = paths
+                .iter()
+                .filter(|path| path.len() >= 2)
+                .map(Vec::as_slice)
+                .collect();
+            if paths.is_empty() {
+                return Err(PdfError::Render("no drawable ink paths supplied".into()));
+            }
 
             let mut xmin = f32::MAX;
             let mut ymin = f32::MAX;
             let mut xmax = f32::MIN;
             let mut ymax = f32::MIN;
-            for path in paths {
-                for [x, y] in path {
-                    xmin = xmin.min(*x);
-                    ymin = ymin.min(*y);
-                    xmax = xmax.max(*x);
-                    ymax = ymax.max(*y);
+            for path in &paths {
+                for [x, y] in path.iter() {
+                    if !x.is_finite() || !y.is_finite() {
+                        return Err(PdfError::Render(
+                            "ink path contains a non-finite point".into(),
+                        ));
+                    }
+                    let x = x.clamp(0.0, 1.0);
+                    let y = y.clamp(0.0, 1.0);
+                    xmin = xmin.min(x);
+                    ymin = ymin.min(y);
+                    xmax = xmax.max(x);
+                    ymax = ymax.max(y);
                 }
             }
+
+            let stroke_width = width.clamp(0.5, 72.0);
+            let padding_x = stroke_width / (2.0 * pw);
+            let padding_y = stroke_width / (2.0 * ph);
+            let rect = PdfRect::new(
+                PdfPoints::new((1.0 - (ymax + padding_y).min(1.0)) * ph),
+                PdfPoints::new((xmin - padding_x).max(0.0) * pw),
+                PdfPoints::new((1.0 - (ymin - padding_y).max(0.0)) * ph),
+                PdfPoints::new((xmax + padding_x).min(1.0) * pw),
+            );
 
             let annots = page.annotations_mut();
             {
@@ -223,14 +268,39 @@ impl Document {
                 ink.set_stroke_color(PdfColor::new(color[0], color[1], color[2], 255))
                     .map_err(|e| PdfError::Render(e.to_string()))?;
 
-                if xmin < f32::MAX {
-                    let rect = PdfRect::new(
-                        PdfPoints::new((1.0 - ymax) * ph),
-                        PdfPoints::new(xmin * pw),
-                        PdfPoints::new(xmax * pw),
-                        PdfPoints::new((1.0 - ymin) * ph),
-                    );
-                    let _ = ink.set_bounds(rect);
+                // FPDFAnnot_AppendObject generates the annotation appearance stream
+                // from these path objects. A bounds-only annotation is an empty box,
+                // which was why freehand strokes and signatures vanished. Annotation
+                // appearance streams are not page content, so this operation must not
+                // run FPDFPage_GenerateContent() after appending each path.
+                ink.set_bounds(rect)
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+
+                for points in paths {
+                    let [first_x, first_y] = points[0];
+                    let mut path = PdfPagePathObject::new(
+                        doc,
+                        PdfPoints::new(first_x.clamp(0.0, 1.0) * pw),
+                        PdfPoints::new((1.0 - first_y.clamp(0.0, 1.0)) * ph),
+                        Some(PdfColor::new(color[0], color[1], color[2], 255)),
+                        Some(PdfPoints::new(stroke_width)),
+                        None,
+                    )
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+                    path.set_line_cap(PdfPageObjectLineCap::Round)
+                        .map_err(|e| PdfError::Render(e.to_string()))?;
+                    path.set_line_join(PdfPageObjectLineJoin::Round)
+                        .map_err(|e| PdfError::Render(e.to_string()))?;
+                    for [x, y] in points.iter().skip(1) {
+                        path.line_to(
+                            PdfPoints::new(x.clamp(0.0, 1.0) * pw),
+                            PdfPoints::new((1.0 - y.clamp(0.0, 1.0)) * ph),
+                        )
+                        .map_err(|e| PdfError::Render(e.to_string()))?;
+                    }
+                    ink.objects_mut()
+                        .add_path_object(path)
+                        .map_err(|e| PdfError::Render(e.to_string()))?;
                 }
             }
             Ok(annots.len().saturating_sub(1) as u32)
@@ -286,28 +356,53 @@ fn create_markup_annotation(
         None => return Err(PdfError::Render("no rects supplied".into())),
     };
     let pdf_rect = screen_to_pdf(&union, pw, ph);
+    let quad_points: Vec<PdfQuadPoints> = rects
+        .iter()
+        .map(|rect| screen_to_pdf_quad_points(rect, pw, ph))
+        .collect();
 
     match kind {
         MarkupKind::Highlight => {
             let mut hl = annots
                 .create_highlight_annotation()
                 .map_err(|e| PdfError::Render(e.to_string()))?;
-            hl.set_bounds(pdf_rect).map_err(|e| PdfError::Render(e.to_string()))?;
-            hl.set_fill_color(color).map_err(|e| PdfError::Render(e.to_string()))?;
+            hl.set_bounds(pdf_rect)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            hl.set_stroke_color(color)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            for points in quad_points {
+                hl.attachment_points_mut()
+                    .create_attachment_point_at_end(points)
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+            }
         }
         MarkupKind::Underline => {
             let mut ul = annots
                 .create_underline_annotation()
                 .map_err(|e| PdfError::Render(e.to_string()))?;
-            ul.set_bounds(pdf_rect).map_err(|e| PdfError::Render(e.to_string()))?;
-            ul.set_fill_color(color).map_err(|e| PdfError::Render(e.to_string()))?;
+            ul.set_bounds(pdf_rect)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            ul.set_stroke_color(color)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            for points in quad_points {
+                ul.attachment_points_mut()
+                    .create_attachment_point_at_end(points)
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+            }
         }
         MarkupKind::Strikeout => {
             let mut so = annots
                 .create_strikeout_annotation()
                 .map_err(|e| PdfError::Render(e.to_string()))?;
-            so.set_bounds(pdf_rect).map_err(|e| PdfError::Render(e.to_string()))?;
-            so.set_fill_color(color).map_err(|e| PdfError::Render(e.to_string()))?;
+            so.set_bounds(pdf_rect)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            so.set_stroke_color(color)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            for points in quad_points {
+                so.attachment_points_mut()
+                    .create_attachment_point_at_end(points)
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+            }
         }
     }
     Ok(annots.len().saturating_sub(1) as u32)
@@ -346,8 +441,25 @@ fn screen_to_pdf(r: &AnnRect, pw: f32, ph: f32) -> PdfRect {
     PdfRect::new(
         PdfPoints::new((1.0 - r.top - r.height).max(0.0) * ph),
         PdfPoints::new(r.left * pw),
-        PdfPoints::new((r.left + r.width).min(1.0) * pw),
         PdfPoints::new((1.0 - r.top).min(1.0) * ph),
+        PdfPoints::new((r.left + r.width).min(1.0) * pw),
+    )
+}
+
+fn screen_to_pdf_quad_points(r: &AnnRect, pw: f32, ph: f32) -> PdfQuadPoints {
+    let rect = screen_to_pdf(r, pw, ph);
+    // Text-markup QuadPoints use PDFium's Z-order: top-left, top-right,
+    // bottom-left, bottom-right. This is intentionally not PdfQuadPoints::from_rect(),
+    // whose generic counter-clockwise ordering does not describe text lines.
+    PdfQuadPoints::new(
+        rect.left(),
+        rect.top(),
+        rect.right(),
+        rect.top(),
+        rect.left(),
+        rect.bottom(),
+        rect.right(),
+        rect.bottom(),
     )
 }
 
@@ -361,4 +473,166 @@ fn union_rects(rects: &[AnnRect]) -> Option<AnnRect> {
         b = b.max(rect.top + rect.height);
     }
     Some(AnnRect { left: l, top: t, width: r - l, height: b - t })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{PdfEngine, RenderRequest, PDFIUM_GATE};
+
+    fn create_blank_pdf(engine: &PdfEngine, path: &std::path::Path) {
+        let _pdfium_guard = PDFIUM_GATE.lock();
+        let pdfium = &engine.pdfium.as_ref().unwrap().0;
+        let mut pdf = pdfium.create_new_pdf().unwrap();
+        pdf.pages_mut()
+            .create_page_at_end(PdfPagePaperSize::a4())
+            .unwrap();
+        pdf.save_to_file(path).unwrap();
+    }
+
+    #[test]
+    fn markup_and_ink_are_visible_and_survive_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("annotations.pdf");
+        let dll_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/pdfium");
+        let engine = PdfEngine::new(&dll_dir).unwrap();
+        create_blank_pdf(&engine, &path);
+
+        let document = engine.open(&path).unwrap();
+        let render = || {
+            document
+                .render_page_raw(RenderRequest {
+                    page_index: 0,
+                    scale: 0.5,
+                })
+                .unwrap()
+                .rgba
+        };
+        let changed_bytes =
+            |left: &[u8], right: &[u8]| left.iter().zip(right).filter(|(a, b)| a != b).count();
+
+        let blank = render();
+        document
+            .add_highlight(
+                0,
+                &[AnnRect {
+                    left: 0.10,
+                    top: 0.10,
+                    width: 0.25,
+                    height: 0.04,
+                }],
+                [255, 214, 0],
+                0.4,
+            )
+            .unwrap();
+        let highlighted = render();
+        assert!(
+            changed_bytes(&highlighted, &blank) > 0,
+            "highlight must change rendered pixels"
+        );
+
+        document
+            .add_underline(
+                0,
+                &[AnnRect {
+                    left: 0.10,
+                    top: 0.20,
+                    width: 0.25,
+                    height: 0.04,
+                }],
+                [255, 0, 0],
+            )
+            .unwrap();
+        let underlined = render();
+        assert!(
+            changed_bytes(&underlined, &highlighted) > 0,
+            "underline must change rendered pixels"
+        );
+
+        document
+            .add_strikeout(
+                0,
+                &[AnnRect {
+                    left: 0.10,
+                    top: 0.30,
+                    width: 0.25,
+                    height: 0.04,
+                }],
+                [0, 80, 255],
+            )
+            .unwrap();
+        let struck = render();
+        assert!(
+            changed_bytes(&struck, &underlined) > 0,
+            "strikeout must change rendered pixels"
+        );
+
+        document
+            .add_ink_annotation(
+                0,
+                &[
+                    vec![[0.45, 0.45], [0.55, 0.50], [0.65, 0.45]],
+                    vec![[0.50, 0.52], [0.60, 0.53]],
+                ],
+                [0, 0, 0],
+                3.0,
+            )
+            .unwrap();
+        let ink_object_count = document.with_doc(|doc| {
+            doc.pages()
+                .get(0)
+                .unwrap()
+                .annotations()
+                .get(3)
+                .unwrap()
+                .objects()
+                .len()
+        });
+        assert_eq!(
+            ink_object_count, 2,
+            "each ink stroke needs an appearance path"
+        );
+        let inked = render();
+        let immediate_ink_changes = changed_bytes(&inked, &struck);
+        assert!(
+            immediate_ink_changes > 0,
+            "ink/signature must change rendered pixels immediately"
+        );
+
+        document.save_to_path(&path).unwrap();
+        drop(document);
+
+        let reopened = engine.open(&path).unwrap();
+        let reopened_render = reopened
+            .render_page_raw(RenderRequest {
+                page_index: 0,
+                scale: 0.5,
+            })
+            .unwrap()
+            .rgba;
+        let annotations = reopened.page_annotations(0).unwrap();
+        assert_eq!(annotations.len(), 4);
+        assert_eq!(annotations[0].kind, "highlight");
+        assert_eq!(annotations[1].kind, "underline");
+        assert_eq!(annotations[2].kind, "strikeout");
+        assert_eq!(annotations[3].kind, "ink");
+        assert!((annotations[0].rect.left - 0.10).abs() < 0.001);
+        assert!((annotations[0].rect.top - 0.10).abs() < 0.001);
+        assert!((annotations[0].rect.width - 0.25).abs() < 0.001);
+        assert!((annotations[0].rect.height - 0.04).abs() < 0.001);
+        let ink_rect = &annotations[3].rect;
+        assert!(ink_rect.left <= 0.45);
+        assert!(ink_rect.left + ink_rect.width >= 0.65);
+        assert!(ink_rect.top <= 0.45);
+        assert!(ink_rect.top + ink_rect.height >= 0.53);
+        assert!(
+            changed_bytes(&reopened_render, &struck) > 0,
+            "ink/signature must change rendered pixels (immediate changes: {immediate_ink_changes})"
+        );
+        assert!(
+            changed_bytes(&reopened_render, &blank) > 0,
+            "saved annotations must still render after reopening"
+        );
+    }
 }

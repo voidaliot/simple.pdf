@@ -1089,7 +1089,6 @@
   <SignatureCapture
     onClose={() => { signOpen = false; }}
     onPlace={async (paths) => {
-      signOpen = false;
       const currentPage = vstore.currentPage;
       if (paths.length === 0) return;
       const sigAspect = 480 / 200;

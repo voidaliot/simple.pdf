@@ -18,6 +18,7 @@
   let allPaths = $state<[number, number][][]>([]);
   let placing = $state(false);
   let saveAfterPlace = $state(false);
+  let placeError = $state("");
 
   function getCtx() { return canvas?.getContext("2d") ?? null; }
 
@@ -72,6 +73,7 @@
   function clear() {
     allPaths = [];
     currentPath = [];
+    placeError = "";
     redraw();
   }
 
@@ -99,12 +101,16 @@
 
   async function place(paths: [number, number][][]) {
     placing = true;
+    placeError = "";
     try {
-      if (saveAfterPlace) {
+      await onPlace(paths);
+      if (saveAfterPlace && activeTab === "draw") {
         const thumb = makeThumbnail(paths);
         signatures.save(paths, thumb);
       }
-      await onPlace(paths);
+      onClose();
+    } catch (error) {
+      placeError = error instanceof Error ? error.message : String(error);
     } finally {
       placing = false;
     }
@@ -165,6 +171,7 @@
         <input type="checkbox" bind:checked={saveAfterPlace} />
         Save signature for reuse
       </label>
+      {#if placeError}<p class="place-error" role="alert">Could not place signature: {placeError}</p>{/if}
       <div class="modal-footer">
         <button onclick={clear}>Clear</button>
         <button class="primary" onclick={placeDrawn} disabled={allPaths.length === 0 || placing}>
@@ -202,6 +209,7 @@
           {/each}
         </div>
       {/if}
+      {#if placeError}<p class="place-error" role="alert">Could not place signature: {placeError}</p>{/if}
     {/if}
   </div>
 </div>
@@ -246,6 +254,7 @@
     font-size: 13px; color: var(--fg-muted); margin: 10px 0 0;
     cursor: pointer;
   }
+  .place-error { margin: 10px 0 0; color: var(--danger, #c00); font-size: 12px; }
   .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
   .modal-footer button {
     padding: 8px 16px; border-radius: var(--radius);
