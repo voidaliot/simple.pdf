@@ -22,21 +22,99 @@ pub struct RawPage {
     pub height: u32,
 }
 
-/// Convert a stride-padded BGRA buffer to a packed RGBA buffer.
+/// Maximum bitmap edge accepted by the renderer. This also stays within the
+/// practical canvas limits of the WebView receiving the pixels.
+const MAX_RENDER_DIMENSION: i32 = 16_384;
+
+/// Maximum pixels in one rendered page (128 MiB for one four-channel bitmap).
+/// The complete render/IPC pipeline temporarily holds more than one copy.
+const MAX_RENDER_PIXELS: u64 = 32 * 1024 * 1024;
+
+/// Validates a requested scale and converts page points to bounded pixel
+/// dimensions without casting NaN/infinity to an arbitrary integer.
+fn checked_render_dimensions(page_w: f32, page_h: f32, scale: f32) -> PdfResult<(i32, i32)> {
+    if !page_w.is_finite() || !page_h.is_finite() || page_w <= 0.0 || page_h <= 0.0 {
+        return Err(PdfError::Render(format!(
+            "invalid page dimensions ({page_w}×{page_h})"
+        )));
+    }
+
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(PdfError::Render(format!(
+            "render scale must be finite and positive (got {scale})"
+        )));
+    }
+
+    // Calculate in f64 so validation occurs before the narrowing integer cast.
+    let scaled_w = (f64::from(page_w) * f64::from(scale)).round().max(1.0);
+    let scaled_h = (f64::from(page_h) * f64::from(scale)).round().max(1.0);
+
+    if !scaled_w.is_finite() || !scaled_h.is_finite() {
+        return Err(PdfError::Render("render dimensions are not finite".into()));
+    }
+
+    let max_dimension = f64::from(MAX_RENDER_DIMENSION);
+    if scaled_w > max_dimension || scaled_h > max_dimension {
+        return Err(PdfError::Render(format!(
+            "render dimensions {:.0}×{:.0} exceed the {} px edge limit",
+            scaled_w, scaled_h, MAX_RENDER_DIMENSION
+        )));
+    }
+
+    let px_w = scaled_w as i32;
+    let px_h = scaled_h as i32;
+    let pixels = (px_w as u64)
+        .checked_mul(px_h as u64)
+        .ok_or_else(|| PdfError::Render("render pixel count overflow".into()))?;
+
+    if pixels > MAX_RENDER_PIXELS {
+        return Err(PdfError::Render(format!(
+            "render requires {pixels} pixels, exceeding the {MAX_RENDER_PIXELS} pixel limit"
+        )));
+    }
+
+    Ok((px_w, px_h))
+}
+
+/// Convert a stride-padded opaque BGRx buffer to packed RGBA.
 ///
 /// `raw` has length `stride * height`; only the first `width * 4` bytes
 /// of each row are real pixels — the rest is alignment padding that must
 /// be skipped.
-fn bgra_stride_to_rgba(raw: &[u8], width: usize, height: usize, stride: usize) -> Vec<u8> {
-    let mut rgba = Vec::with_capacity(width * height * 4);
+fn bgrx_stride_to_rgba(
+    raw: &[u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+) -> PdfResult<Vec<u8>> {
+    let row_bytes_len = width
+        .checked_mul(4)
+        .ok_or_else(|| PdfError::Render("bitmap row size overflow".into()))?;
+    let expected_raw_len = stride
+        .checked_mul(height)
+        .ok_or_else(|| PdfError::Render("bitmap buffer size overflow".into()))?;
+    let output_len = row_bytes_len
+        .checked_mul(height)
+        .ok_or_else(|| PdfError::Render("RGBA output size overflow".into()))?;
+
+    if stride < row_bytes_len || raw.len() != expected_raw_len {
+        return Err(PdfError::Render(format!(
+            "invalid bitmap layout: {} bytes for {width}×{height} at stride {stride}",
+            raw.len()
+        )));
+    }
+
+    let mut rgba = Vec::with_capacity(output_len);
     for row in 0..height {
-        let row_bytes = &raw[row * stride..row * stride + width * 4];
+        let row_bytes = &raw[row * stride..row * stride + row_bytes_len];
         for chunk in row_bytes.chunks_exact(4) {
-            // PDFium BGRA → web RGBA: swap B (byte 0) ↔ R (byte 2)
-            rgba.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]]);
+            // PDFium BGRx → web RGBA: swap B/R and do not interpret the
+            // undefined x byte as alpha. The page is explicitly rendered
+            // against opaque white, so output alpha is always 255.
+            rgba.extend_from_slice(&[chunk[2], chunk[1], chunk[0], 255]);
         }
     }
-    rgba
+    Ok(rgba)
 }
 
 impl Document {
@@ -45,9 +123,7 @@ impl Document {
             let pages = doc.pages();
             let mut sizes = Vec::with_capacity(pages.len() as usize);
             for i in 0..pages.len() {
-                let page = pages
-                    .get(i)
-                    .map_err(|e| PdfError::Render(e.to_string()))?;
+                let page = pages.get(i).map_err(|e| PdfError::Render(e.to_string()))?;
                 sizes.push(PageSize {
                     width: page.width().value,
                     height: page.height().value,
@@ -59,27 +135,10 @@ impl Document {
 
     /// Render one page to raw RGBA pixel data.
     ///
-    /// ## Why `set_reverse_byte_order(false)` is the key fix
-    ///
-    /// When `FPDF_REVERSE_BYTE_ORDER` is active (pdfium-render's default),
-    /// PDFium writes rendered pixels in RGBA order but still *reads* the
-    /// destination bitmap in BGRA order during Porter-Duff compositing of
-    /// transparency groups and soft masks.  This read/write mismatch corrupts
-    /// the compositor and produces solid-black areas wherever transparency
-    /// groups or blend modes are used (common in ASPICE PDFs, scanned docs,
-    /// many modern-designed PDFs).
-    ///
-    /// Disabling the flag keeps the entire pipeline — pre-fill, transparency
-    /// group compositing, final write — in native BGRA, eliminating the
-    /// mismatch.  We do the BGRA→RGBA byte swap ourselves in Rust after
-    /// rendering, where it is straightforward and cheap.
-    ///
-    /// ## Other flags
-    ///
-    /// * `use_lcd_text_rendering` (FPDF_LCD_TEXT): enables LCD subpixel
-    ///   antialiasing for text on screen.
-    /// * `use_print_quality` (FPDF_PRINTING): uses the same rendering path
-    ///   as Chromium's PDF plugin for transparency group flattening.
+    /// PDFium renders into an explicitly opaque white BGRx target in its native
+    /// byte order. The display path intentionally uses the default screen
+    /// rendering flags (no LCD subpixel or printing mode), then performs the
+    /// BGRx-to-RGBA conversion here with a forced opaque alpha channel.
     ///
     /// ## Output
     ///
@@ -98,51 +157,65 @@ impl Document {
             let page_w = page.width().value;
             let page_h = page.height().value;
 
-            if page_w <= 0.0 || page_h <= 0.0 {
+            let (px_w, px_h) = checked_render_dimensions(page_w, page_h, req.scale)?;
+
+            // PdfRenderConfig defaults that matter here:
+            //   clear_before_render = true   ← FPDFBitmap_FillRect called before FPDF_RenderPageBitmap
+            //
+            // Explicit settings deliberately keep the display render path
+            // minimal. In particular, LCD_TEXT and PRINTING are not enabled:
+            // they can change compositing/font behavior and are inappropriate
+            // for a CSS-scaled screen bitmap.
+            //
+            // BGRx plus an opaque white clear gives PDFium an opaque target for
+            // transparency groups. We leave byte order native and normalize it
+            // ourselves after rendering.
+            let config = PdfRenderConfig::new()
+                .set_target_width(px_w)
+                .set_target_height(px_h)
+                .set_format(PdfBitmapFormat::BGRx)
+                .set_clear_color(PdfColor::WHITE)
+                .render_annotations(true)
+                // Interactive widgets are drawn by the HTML form layer.
+                .render_form_data(false)
+                .set_reverse_byte_order(false);
+
+            let bitmap = page.render_with_config(&config).map_err(|e| {
+                PdfError::Render(format!(
+                    "pdfium render error (page {}, {}×{}): {}",
+                    req.page_index, px_w, px_h, e
+                ))
+            })?;
+
+            let w = usize::try_from(bitmap.width())
+                .map_err(|_| PdfError::Render("PDFium returned a negative bitmap width".into()))?;
+            let h = usize::try_from(bitmap.height())
+                .map_err(|_| PdfError::Render("PDFium returned a negative bitmap height".into()))?;
+            if w == 0 || h == 0 {
                 return Err(PdfError::Render(format!(
-                    "page {} has zero dimensions ({page_w}×{page_h})",
+                    "PDFium returned an empty bitmap for page {}",
                     req.page_index
                 )));
             }
 
-            let px_w = (page_w * req.scale).round().max(1.0) as i32;
-            let px_h = (page_h * req.scale).round().max(1.0) as i32;
-
-            // PdfRenderConfig defaults that matter here:
-            //   format              = BGRA   ← real alpha channel (not BGRx)
-            //   clear_before_render = true   ← FPDFBitmap_FillRect called before FPDF_RenderPageBitmap
-            //   clear_color         = WHITE  ← 0xFFFFFFFF: opaque white
-            //   render_annotations  = true   ← FPDF_ANNOT
-            //
-            // Explicit overrides:
-            //   set_reverse_byte_order(false) ← NO FPDF_REVERSE_BYTE_ORDER
-            //   use_lcd_text_rendering(true)  ← FPDF_LCD_TEXT
-            //   use_print_quality(true)        ← FPDF_PRINTING
-            let config = PdfRenderConfig::new()
-                .set_target_width(px_w)
-                .set_target_height(px_h)
-                .use_lcd_text_rendering(true)
-                .use_print_quality(true)
-                .set_reverse_byte_order(false);
-
-            let bitmap = page
-                .render_with_config(&config)
-                .map_err(|e| PdfError::Render(format!(
-                    "pdfium render error (page {}, {}×{}): {}",
-                    req.page_index, px_w, px_h, e
-                )))?;
-
-            let w = bitmap.width() as usize;
-            let h = bitmap.height() as usize;
-
             // `as_raw_bytes()` returns stride * height bytes; stride may exceed
             // width * 4 due to alignment padding.  Strip the padding per-row
-            // while doing the BGRA→RGBA channel swap.
+            // while doing the BGRx→RGBA channel swap.
             let raw = bitmap.as_raw_bytes();
-            let stride = if h > 0 { raw.len() / h } else { w * 4 };
-            let rgba = bgra_stride_to_rgba(&raw, w, h, stride);
+            if raw.len() % h != 0 {
+                return Err(PdfError::Render(format!(
+                    "PDFium returned a malformed bitmap buffer for page {}",
+                    req.page_index
+                )));
+            }
+            let stride = raw.len() / h;
+            let rgba = bgrx_stride_to_rgba(&raw, w, h, stride)?;
 
-            Ok(RawPage { rgba, width: w as u32, height: h as u32 })
+            Ok(RawPage {
+                rgba,
+                width: w as u32,
+                height: h as u32,
+            })
         })
     }
 
@@ -160,34 +233,42 @@ impl Document {
             let page_w = page.width().value;
             let page_h = page.height().value;
 
-            if page_w <= 0.0 || page_h <= 0.0 {
-                return Err(PdfError::Render(format!(
-                    "page {} has zero dimensions ({page_w}×{page_h})",
-                    req.page_index
-                )));
-            }
-
-            let px_w = (page_w * req.scale).round().max(1.0) as i32;
-            let px_h = (page_h * req.scale).round().max(1.0) as i32;
+            let (px_w, px_h) = checked_render_dimensions(page_w, page_h, req.scale)?;
 
             let config = PdfRenderConfig::new()
                 .set_target_width(px_w)
                 .set_target_height(px_h)
-                .use_print_quality(true)
+                .set_format(PdfBitmapFormat::BGRx)
+                .set_clear_color(PdfColor::WHITE)
+                .render_annotations(true)
                 .set_reverse_byte_order(false);
 
-            let bitmap = page
-                .render_with_config(&config)
-                .map_err(|e| PdfError::Render(format!(
+            let bitmap = page.render_with_config(&config).map_err(|e| {
+                PdfError::Render(format!(
                     "pdfium render error (page {}, {}×{}): {}",
                     req.page_index, px_w, px_h, e
-                )))?;
+                ))
+            })?;
 
-            let w = bitmap.width() as usize;
-            let h = bitmap.height() as usize;
+            let w = usize::try_from(bitmap.width())
+                .map_err(|_| PdfError::Render("PDFium returned a negative bitmap width".into()))?;
+            let h = usize::try_from(bitmap.height())
+                .map_err(|_| PdfError::Render("PDFium returned a negative bitmap height".into()))?;
+            if w == 0 || h == 0 {
+                return Err(PdfError::Render(format!(
+                    "PDFium returned an empty bitmap for page {}",
+                    req.page_index
+                )));
+            }
             let raw = bitmap.as_raw_bytes();
-            let stride = if h > 0 { raw.len() / h } else { w * 4 };
-            let rgba = bgra_stride_to_rgba(&raw, w, h, stride);
+            if raw.len() % h != 0 {
+                return Err(PdfError::Render(format!(
+                    "PDFium returned a malformed bitmap buffer for page {}",
+                    req.page_index
+                )));
+            }
+            let stride = raw.len() / h;
+            let rgba = bgrx_stride_to_rgba(&raw, w, h, stride)?;
 
             // RGBA → RGB (drop alpha, all pixels are fully opaque anyway) → JPEG
             let rgb_img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
@@ -202,5 +283,65 @@ impl Document {
 
             Ok(buf.into_inner())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_dimensions_round_normally() {
+        assert_eq!(
+            checked_render_dimensions(612.0, 792.0, 1.5).unwrap(),
+            (918, 1188)
+        );
+        assert_eq!(checked_render_dimensions(0.1, 0.1, 0.1).unwrap(), (1, 1));
+    }
+
+    #[test]
+    fn checked_dimensions_reject_invalid_scale() {
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(checked_render_dimensions(612.0, 792.0, scale).is_err());
+        }
+    }
+
+    #[test]
+    fn checked_dimensions_reject_invalid_page_size() {
+        assert!(checked_render_dimensions(0.0, 792.0, 1.0).is_err());
+        assert!(checked_render_dimensions(-612.0, 792.0, 1.0).is_err());
+        assert!(checked_render_dimensions(f32::NAN, 792.0, 1.0).is_err());
+        assert!(checked_render_dimensions(612.0, f32::INFINITY, 1.0).is_err());
+    }
+
+    #[test]
+    fn checked_dimensions_enforce_edge_and_pixel_limits() {
+        assert!(checked_render_dimensions(1_000.0, 1_000.0, 20.0).is_err());
+        assert!(checked_render_dimensions(10_000.0, 10_000.0, 1.0).is_err());
+
+        // Exactly the configured pixel budget remains valid.
+        assert_eq!(
+            checked_render_dimensions(4_096.0, 8_192.0, 1.0).unwrap(),
+            (4_096, 8_192)
+        );
+    }
+
+    #[test]
+    fn bgrx_conversion_skips_padding_and_forces_opaque_alpha() {
+        let raw = [
+            1, 2, 3, 0, 4, 5, 6, 17, 99, 99, 99, 99, // row 0 + padding
+            7, 8, 9, 42, 10, 11, 12, 128, 88, 88, 88, 88, // row 1 + padding
+        ];
+
+        assert_eq!(
+            bgrx_stride_to_rgba(&raw, 2, 2, 12).unwrap(),
+            vec![3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, 12, 11, 10, 255,]
+        );
+    }
+
+    #[test]
+    fn bgrx_conversion_rejects_malformed_layout() {
+        assert!(bgrx_stride_to_rgba(&[0; 8], 2, 1, 7).is_err());
+        assert!(bgrx_stride_to_rgba(&[0; 7], 1, 2, 4).is_err());
     }
 }

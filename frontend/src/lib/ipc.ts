@@ -40,7 +40,7 @@ export interface AnnRect {
 
 export interface Annotation {
   index: number;
-  kind: "highlight" | "underline" | "squiggly" | "strikeout" | "text" | "ink" | "widget" | "stamp" | "freetext" | "other";
+  kind: "highlight" | "underline" | "squiggly" | "strikeout" | "text" | "ink" | "link" | "widget" | "stamp" | "freetext" | "other";
   rect: AnnRect;
   /** RGBA each 0-255 */
   color: [number, number, number, number];
@@ -91,18 +91,56 @@ export async function renderPagePixels(
   pageIndex: number,
   scale: number,
 ): Promise<{ width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> }> {
-  // Tauri binary IPC returns a plain ArrayBuffer (never SharedArrayBuffer).
-  const buf = await invoke<ArrayBuffer>("render_page_pixels", {
+  // Tauri's custom-protocol transport returns an ArrayBuffer. If WebView2
+  // blocks that protocol, Tauri falls back to postMessage and serializes the
+  // same Rust Vec<u8> as a number[]. Normalize both transports here; the
+  // generic passed to invoke is only a TypeScript assertion and performs no
+  // runtime conversion.
+  const payload = await invoke<ArrayBuffer | Uint8Array | number[]>("render_page_pixels", {
     id: docId,
     pageIndex,
     scale,
   });
-  const ab = buf as ArrayBuffer;
-  const view = new DataView(ab);
+  const bytes = normalizeBinaryResponse(payload);
+  if (bytes.byteLength < 8) throw new Error("Renderer returned an incomplete page frame");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const width = view.getUint32(0, true);
   const height = view.getUint32(4, true);
-  const data = new Uint8ClampedArray(ab, 8, width * height * 4);
+  const pixelBytes = width * height * 4;
+  if (width === 0 || height === 0 || !Number.isSafeInteger(pixelBytes)) {
+    throw new Error(`Renderer returned invalid page dimensions (${width} x ${height})`);
+  }
+  if (bytes.byteLength !== 8 + pixelBytes) {
+    throw new Error(
+      `Renderer returned ${bytes.byteLength - 8} pixel bytes; expected ${pixelBytes}`,
+    );
+  }
+  const data = new Uint8ClampedArray(
+    bytes.buffer,
+    bytes.byteOffset + 8,
+    pixelBytes,
+  );
   return { width, height, data };
+}
+
+function normalizeBinaryResponse(payload: unknown): Uint8Array<ArrayBuffer> {
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+
+  if (ArrayBuffer.isView(payload)) {
+    // Copy views so the returned buffer is always a plain ArrayBuffer and the
+    // ImageData constructor receives a stable, tightly-owned byte range.
+    const view = new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+    return Uint8Array.from(view);
+  }
+
+  if (Array.isArray(payload)) {
+    if (!payload.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)) {
+      throw new Error("Renderer returned invalid binary page data");
+    }
+    return Uint8Array.from(payload);
+  }
+
+  throw new Error("Renderer returned an unsupported binary response");
 }
 
 /**
@@ -228,8 +266,8 @@ export async function removeAnnotation(
   return invoke("remove_annotation", { id, pageIndex, annotIndex });
 }
 
-export async function undoAnnotation(id: string): Promise<boolean> {
-  return invoke<boolean>("undo_annotation", { id });
+export async function undoAnnotation(id: string): Promise<number | null> {
+  return invoke<number | null>("undo_annotation", { id });
 }
 
 export async function saveDocument(id: string): Promise<void> {

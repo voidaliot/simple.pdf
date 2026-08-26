@@ -1,19 +1,103 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { isTauri } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { tabs } from "../stores/tabs.svelte";
+  import Icon from "./Icon.svelte";
+
+  const appWindow = isTauri() ? getCurrentWindow() : null;
 
   let dragFrom = $state<number | null>(null);
   let dragOver = $state<number | null>(null);
+  let maximized = $state(false);
+  let tabMenuOpen = $state(false);
+  let tablistEl: HTMLDivElement | undefined = $state();
+  let tabMenuEl: HTMLDivElement | undefined = $state();
+
+  $effect(() => {
+    const activeId = tabs.activeId;
+    requestAnimationFrame(() => {
+      document.getElementById(`tab-${activeId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+    });
+  });
+
+  onMount(() => {
+    let disposed = false;
+    let unlistenResize: (() => void) | undefined;
+
+    async function updateMaximized() {
+      if (!appWindow) return;
+      try {
+        const next = await appWindow.isMaximized();
+        if (!disposed) maximized = next;
+      } catch (error) {
+        console.error("failed to read window state", error);
+      }
+    }
+
+    void updateMaximized();
+    if (appWindow) {
+      void appWindow.onResized(() => void updateMaximized()).then((unlisten) => {
+        if (disposed) unlisten();
+        else unlistenResize = unlisten;
+      });
+    }
+
+    return () => {
+      disposed = true;
+      unlistenResize?.();
+    };
+  });
+
+  function focusTab(index: number) {
+    const count = tabs.list.length;
+    if (count === 0) return;
+    const targetIndex = (index + count) % count;
+    tabs.activate(tabs.list[targetIndex]!.id);
+    requestAnimationFrame(() => {
+      tablistEl?.querySelectorAll<HTMLButtonElement>(".tab-main")[targetIndex]?.focus();
+    });
+  }
+
+  function onTabKeyDown(e: KeyboardEvent, index: number) {
+    let target: number | undefined;
+    if (e.key === "ArrowRight") target = index + 1;
+    else if (e.key === "ArrowLeft") target = index - 1;
+    else if (e.key === "Home") target = 0;
+    else if (e.key === "End") target = tabs.list.length - 1;
+    if (target === undefined) return;
+    e.preventDefault();
+    focusTab(target);
+  }
+
+  function closeTab(id: string) {
+    if (!tabs.close(id)) return;
+    requestAnimationFrame(() => {
+      const activeIndex = tabs.list.findIndex((tab) => tab.id === tabs.activeId);
+      if (activeIndex >= 0) {
+        tablistEl?.querySelectorAll<HTMLButtonElement>(".tab-main")[activeIndex]?.focus();
+      }
+    });
+  }
 
   function onMouseDown(e: MouseEvent, id: string) {
     if (e.button === 1) {
       e.preventDefault();
-      tabs.close(id);
+      closeTab(id);
     }
   }
 
   function onDragStart(e: DragEvent, idx: number) {
     dragFrom = idx;
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    tabMenuOpen = false;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", tabs.list[idx]?.id ?? "");
+    }
   }
 
   function onDragOver(e: DragEvent, idx: number) {
@@ -25,9 +109,7 @@
 
   function onDrop(e: DragEvent, idx: number) {
     e.preventDefault();
-    if (dragFrom !== null && dragFrom !== idx) {
-      tabs.reorder(dragFrom, idx);
-    }
+    if (dragFrom !== null && dragFrom !== idx) tabs.reorder(dragFrom, idx);
     dragFrom = null;
     dragOver = null;
   }
@@ -36,135 +118,282 @@
     dragFrom = null;
     dragOver = null;
   }
+
+  function activateFromMenu(id: string) {
+    tabs.activate(id);
+    tabMenuOpen = false;
+  }
+
+  function onWindowPointerDown(e: PointerEvent) {
+    if (tabMenuOpen && !tabMenuEl?.contains(e.target as Node)) tabMenuOpen = false;
+  }
+
+  function onWindowKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape") tabMenuOpen = false;
+  }
+
+  async function minimizeWindow() {
+    if (!appWindow) return;
+    try {
+      await appWindow.minimize();
+    } catch (error) {
+      console.error("failed to minimize window", error);
+    }
+  }
+
+  async function toggleMaximizeWindow() {
+    if (!appWindow) return;
+    try {
+      await appWindow.toggleMaximize();
+      maximized = await appWindow.isMaximized();
+    } catch (error) {
+      console.error("failed to toggle window size", error);
+    }
+  }
+
+  async function closeWindow() {
+    if (!appWindow) return;
+    try {
+      await appWindow.close();
+    } catch (error) {
+      console.error("failed to close window", error);
+    }
+  }
 </script>
 
-<div class="tabbar" role="tablist">
-  <div class="tabs">
+<svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeyDown} />
+
+<header class="titlebar" data-tauri-drag-region aria-label="Application title bar">
+  <div class="tab-actions-wrap" bind:this={tabMenuEl}>
+    <button
+      class="tab-actions"
+      class:open={tabMenuOpen}
+      aria-label="Show open tabs"
+      aria-haspopup="menu"
+      aria-expanded={tabMenuOpen}
+      title="Open tabs"
+      onclick={() => tabMenuOpen = !tabMenuOpen}
+    ><Icon name="chevron-down" size={16} /></button>
+
+    {#if tabMenuOpen}
+      <div class="tab-menu" role="menu" aria-label="Open tabs">
+        <div class="menu-heading">Open tabs</div>
+        {#each tabs.list as tab (tab.id)}
+          <button
+            class="menu-tab"
+            class:active={tab.id === tabs.activeId}
+            role="menuitem"
+            title={tab.path ?? tab.title}
+            onclick={() => activateFromMenu(tab.id)}
+          >
+            <span class="menu-icon" aria-hidden="true">
+              <Icon name={tab.kind === "home" ? "home" : tab.kind === "settings" ? "settings" : "file"} size={15} />
+            </span>
+            <span class="menu-title">{tab.dirty ? "• " : ""}{tab.title}</span>
+            {#if tab.id === tabs.activeId}<span class="active-dot" aria-hidden="true"></span>{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
+  <div class="tabs" bind:this={tablistEl} role="tablist" aria-label="Open tabs" data-tauri-drag-region>
     {#each tabs.list as tab, i (tab.id)}
       <div
-        class="tab"
-        class:active={tab.id === tabs.activeId}
+        class="tab-shell"
+        class:active-shell={tab.id === tabs.activeId}
+        class:closable={tabs.list.length > 1 || tab.kind !== "home"}
         class:drag-over={dragOver === i}
-        role="tab"
-        tabindex="0"
-        aria-selected={tab.id === tabs.activeId}
-        title={tab.path ?? tab.title}
+        role="presentation"
         draggable="true"
-        onclick={() => tabs.activate(tab.id)}
-        onmousedown={(e) => onMouseDown(e, tab.id)}
-        onkeydown={(e) => {
-          if (e.key === "Enter" || e.key === " ") tabs.activate(tab.id);
-        }}
         ondragstart={(e) => onDragStart(e, i)}
         ondragover={(e) => onDragOver(e, i)}
         ondrop={(e) => onDrop(e, i)}
         ondragend={onDragEnd}
       >
-        <span class="title">{tab.dirty ? "• " : ""}{tab.title}</span>
+        <button
+          class="tab-main"
+          class:active={tab.id === tabs.activeId}
+          id={`tab-${tab.id}`}
+          role="tab"
+          tabindex={tab.id === tabs.activeId ? 0 : -1}
+          aria-selected={tab.id === tabs.activeId}
+          aria-controls={`panel-${tab.id}`}
+          title={tab.path ?? tab.title}
+          onclick={() => tabs.activate(tab.id)}
+          onmousedown={(e) => onMouseDown(e, tab.id)}
+          onkeydown={(e) => onTabKeyDown(e, i)}
+        >
+          <span class="tab-icon" aria-hidden="true">
+            <Icon name={tab.kind === "home" ? "home" : tab.kind === "settings" ? "settings" : "file"} size={15} />
+          </span>
+          <span class="title" title={tab.path ?? tab.title}>{tab.dirty ? "• " : ""}{tab.title}</span>
+        </button>
         {#if tabs.list.length > 1 || tab.kind !== "home"}
           <button
-            class="close"
+            class="close-tab"
+            tabindex={tab.id === tabs.activeId ? 0 : -1}
             aria-label="Close {tab.title} tab"
-            tabindex="-1"
-            onclick={(e) => {
-              e.stopPropagation();
-              tabs.close(tab.id);
-            }}
-          >×</button>
+            onclick={() => closeTab(tab.id)}
+          ><Icon name="close" size={14} strokeWidth={1.7} /></button>
         {/if}
       </div>
     {/each}
-    <button class="new-tab" aria-label="New tab" onclick={() => tabs.openHome()}>+</button>
   </div>
-  <div class="drag-region" data-tauri-drag-region>
-    <button class="settings-btn" aria-label="Settings" title="Settings"
-      onclick={() => tabs.openSettings()}>⚙</button>
+
+  <button class="new-tab" aria-label="New tab" title="New tab (Ctrl+T)" onclick={() => tabs.openHome()}>
+    <Icon name="plus" size={17} />
+  </button>
+
+  <div class="window-drag" data-tauri-drag-region aria-hidden="true"></div>
+
+  <button class="settings-btn" aria-label="Settings" title="Settings" onclick={() => tabs.openSettings()}>
+    <Icon name="settings" size={17} />
+  </button>
+
+  <div class="window-controls" aria-label="Window controls">
+    <button class="caption-button" aria-label="Minimize" title="Minimize" onclick={minimizeWindow}>
+      <Icon name="minus" size={15} strokeWidth={1.5} />
+    </button>
+    <button
+      class="caption-button"
+      aria-label={maximized ? "Restore" : "Maximize"}
+      title={maximized ? "Restore" : "Maximize"}
+      onclick={toggleMaximizeWindow}
+    >
+      <Icon name={maximized ? "restore" : "maximize"} size={14} strokeWidth={1.45} />
+    </button>
+    <button class="caption-button close-window" aria-label="Close" title="Close" onclick={closeWindow}>
+      <Icon name="close" size={15} strokeWidth={1.55} />
+    </button>
   </div>
-</div>
+</header>
 
 <style>
-  .tabbar {
-    display: flex;
-    align-items: flex-end;
-    height: var(--chrome-h);
-    background: var(--bg-chrome);
-    border-bottom: 1px solid var(--border);
-    padding: 6px 8px 0 8px;
-    gap: 4px;
-    user-select: none;
+  .titlebar {
+    position: relative; z-index: 200;
+    display: flex; align-items: stretch; flex: 0 0 var(--chrome-h);
+    width: 100%; height: var(--chrome-h); min-width: 0;
+    padding-left: 7px; border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-chrome); user-select: none;
   }
+  .tab-actions-wrap {
+    position: relative; z-index: 3; display: flex; align-items: center;
+    flex: 0 0 38px; width: 38px;
+  }
+  .tab-actions, .new-tab, .settings-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; flex: 0 0 32px;
+    border: 0; border-radius: 9px; background: transparent;
+    color: var(--fg-muted); cursor: pointer;
+    transition: color 100ms ease, background 100ms ease;
+  }
+  .tab-actions:hover, .tab-actions.open, .new-tab:hover, .settings-btn:hover {
+    color: var(--fg); background: var(--control-hover);
+  }
+  .tab-menu {
+    position: absolute; top: 41px; left: 0; width: min(280px, calc(100vw - 20px));
+    max-height: min(420px, calc(100vh - 60px)); overflow: auto;
+    padding: 7px; border: 1px solid var(--border); border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-elev) 96%, transparent);
+    box-shadow: var(--shadow-lg); backdrop-filter: blur(18px);
+  }
+  .menu-heading {
+    padding: 5px 9px 7px; color: var(--fg-muted);
+    font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  }
+  .menu-tab {
+    width: 100%; height: 34px; display: flex; align-items: center; gap: 9px;
+    padding: 0 9px; border: 0; border-radius: 7px; background: transparent;
+    color: var(--fg-muted); cursor: pointer; text-align: left;
+  }
+  .menu-tab:hover, .menu-tab.active { background: var(--control-hover); color: var(--fg); }
+  .menu-icon { display: inline-flex; flex: 0 0 auto; }
+  .menu-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .active-dot { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--accent); }
+
   .tabs {
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    max-width: calc(100% - 100px);
+    display: flex; align-items: flex-end; flex: 0 1 auto;
+    min-width: 0; max-width: calc(100% - 280px); height: 100%;
+    padding-top: 7px; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; overscroll-behavior-x: contain;
   }
   .tabs::-webkit-scrollbar { display: none; }
-  .tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--tab-inactive-bg);
-    border: 1px solid var(--border);
-    border-bottom: none;
-    border-radius: 8px 8px 0 0;
-    padding: 6px 8px 6px 12px;
-    max-width: 220px;
-    min-width: 120px;
-    cursor: pointer;
-    color: var(--fg-muted);
-    transition: background 120ms ease, color 120ms ease;
+  .tab-shell {
+    position: relative; display: flex; align-items: center;
+    width: 220px; min-width: 72px; max-width: 240px; height: 38px;
+    flex: 1 1 220px; container-type: inline-size;
   }
-  .tab.active {
-    background: var(--tab-active-bg);
-    color: var(--fg);
-    box-shadow: var(--shadow-sm);
+  .tab-shell::before {
+    content: ""; position: absolute; z-index: 0; left: 0; top: 11px;
+    width: 1px; height: 17px; background: var(--border); opacity: .72;
+    transition: opacity 100ms ease;
   }
-  .tab:hover { color: var(--fg); }
-  .tab.drag-over { border-left: 2px solid var(--accent); }
+  .tab-shell:first-child::before,
+  .tab-shell.active-shell::before,
+  .tab-shell.active-shell + .tab-shell::before,
+  .tab-shell:hover::before,
+  .tab-shell:hover + .tab-shell::before { opacity: 0; }
+  .tab-main {
+    position: relative; z-index: 1; display: inline-flex; align-items: center;
+    width: 100%; height: 38px; min-width: 0; flex: 1; gap: 8px;
+    padding: 0 12px; border: 1px solid transparent; border-bottom: 0;
+    border-radius: 10px 10px 0 0; background: transparent;
+    color: var(--fg-muted); cursor: pointer; outline: none; font: inherit;
+    transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+  }
+  .tab-shell.closable .tab-main { padding-right: 34px; }
+  .tab-main.active {
+    border-color: var(--border-subtle); background: var(--tab-active-bg); color: var(--fg);
+    box-shadow: 0 -1px 2px rgba(18, 23, 33, .035);
+  }
+  .tab-shell:hover .tab-main:not(.active) { background: var(--control-hover); color: var(--fg); }
+  .tab-main:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .tab-shell.drag-over { box-shadow: inset 2px 0 var(--accent); }
+  .tab-icon { display: inline-flex; flex-shrink: 0; color: var(--fg-muted); }
   .title {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: left;
+    min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; text-align: left; font-size: 12px;
   }
-  .close {
-    font-size: 15px;
-    line-height: 1;
-    width: 20px;
-    height: 20px;
-    border: none;
-    background: transparent;
-    border-radius: 4px;
-    padding: 0;
-    cursor: pointer;
-    color: inherit;
-    opacity: 0.5;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
+  .close-tab {
+    position: absolute; z-index: 2; right: 7px; top: 8px;
+    display: flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; flex-shrink: 0;
+    border: 0; border-radius: 6px; background: transparent;
+    color: inherit; opacity: 0; cursor: pointer;
   }
-  .close:hover { background: rgba(127,127,127,0.2); opacity: 1; }
-  .new-tab {
-    background: transparent;
-    border: none;
-    font-size: 18px;
-    width: 28px;
-    height: 28px;
-    border-radius: 4px;
-    cursor: pointer;
-    color: var(--fg-muted);
-    margin-bottom: 4px;
+  .tab-shell:hover .close-tab, .tab-main.active + .close-tab, .close-tab:focus-visible { opacity: .62; }
+  .close-tab:hover { background: var(--control-hover); opacity: 1 !important; }
+
+  .new-tab, .settings-btn { align-self: center; margin: 0 3px; }
+  .window-drag { min-width: 24px; flex: 1 1 80px; }
+  .window-controls { display: flex; align-items: stretch; flex: 0 0 auto; height: var(--chrome-h); margin-left: 2px; }
+  .caption-button {
+    display: inline-grid; place-items: center;
+    width: 46px; height: var(--chrome-h); padding: 0;
+    border: 0; border-radius: 0; background: transparent;
+    color: var(--fg); cursor: default;
+    transition: color 80ms ease, background 80ms ease;
   }
-  .new-tab:hover { background: rgba(127,127,127,0.15); color: var(--fg); }
-  .drag-region { flex: 1; align-self: stretch; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; }
-  .settings-btn {
-    background: transparent; border: none; font-size: 16px; color: var(--fg-muted);
-    cursor: pointer; padding: 4px; border-radius: var(--radius); line-height: 1;
+  .caption-button:hover { background: var(--control-hover); }
+  .caption-button:active { background: color-mix(in srgb, var(--control-hover) 72%, var(--fg) 8%); }
+  .close-window:hover, .close-window:active { color: #fff; background: #c42b1c; }
+
+  @container (max-width: 92px) {
+    .tab-icon { display: none; }
+    .tab-main { padding-left: 10px; }
   }
-  .settings-btn:hover { color: var(--fg); background: rgba(127,127,127,0.15); }
+
+  @media (max-width: 760px) {
+    .tabs { max-width: calc(100% - 254px); }
+    .tab-shell { min-width: 62px; }
+    .window-drag { min-width: 8px; }
+    .settings-btn { margin-left: 0; }
+  }
+
+  @media (forced-colors: active) {
+    .titlebar { border-bottom-color: CanvasText; }
+    .tab-main.active { border: 1px solid Highlight; border-bottom: 0; }
+    .caption-button:hover, .close-window:hover { color: HighlightText; background: Highlight; }
+  }
 </style>

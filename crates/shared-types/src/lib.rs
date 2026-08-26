@@ -3,11 +3,11 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../frontend/src/types-generated/")]
+#[ts(export, export_to = "../../../frontend/src/types-generated/")]
 pub struct DocumentId(pub Uuid);
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../frontend/src/types-generated/")]
+#[ts(export, export_to = "../../../frontend/src/types-generated/")]
 pub struct DocumentInfo {
     pub id: DocumentId,
     pub path: String,
@@ -16,14 +16,14 @@ pub struct DocumentInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../frontend/src/types-generated/")]
+#[ts(export, export_to = "../../../frontend/src/types-generated/")]
 pub struct PageSize {
     pub width: f32,
     pub height: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../frontend/src/types-generated/")]
+#[ts(export, export_to = "../../../frontend/src/types-generated/")]
 pub struct RecentFile {
     pub path: String,
     pub title: String,
@@ -34,7 +34,7 @@ pub struct RecentFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../frontend/src/types-generated/")]
+#[ts(export, export_to = "../../../frontend/src/types-generated/")]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
     System,
@@ -43,7 +43,7 @@ pub enum Theme {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../frontend/src/types-generated/")]
+#[ts(export, export_to = "../../../frontend/src/types-generated/")]
 pub struct AppVersion {
     pub name: String,
     pub version: String,

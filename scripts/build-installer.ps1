@@ -1,5 +1,5 @@
 # Build the simple.pdf NSIS installer.
-# Produces target\release\bundle\nsis\simple.pdf_*_x64-setup.exe.
+# Produces target\x86_64-pc-windows-msvc\release\bundle\nsis\simple.pdf_*_x64-setup.exe.
 #
 # Prerequisites: Rust toolchain, Node/pnpm, pdfium.dll in resources\pdfium\,
 #                NSIS 3.x installed and on PATH.
@@ -10,18 +10,18 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 
-Write-Host "=== simple.pdf — NSIS installer build ===" -ForegroundColor Cyan
+Write-Host "=== simple.pdf - NSIS installer build ===" -ForegroundColor Cyan
 
 Push-Location (Join-Path $Root "crates\app")
 try {
-    Write-Host "[1/2] Building NSIS installer…"
-    cargo tauri build --bundles nsis
-    if ($LASTEXITCODE -ne 0) { throw "cargo tauri build failed" }
+    Write-Host "[1/2] Building NSIS installer..."
+    node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --bundles nsis
+    if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
 } finally {
     Pop-Location
 }
 
-$Bundle = Join-Path $Root "target\release\bundle\nsis"
+$Bundle = Join-Path $Root "target\x86_64-pc-windows-msvc\release\bundle\nsis"
 $Installer = Get-ChildItem -Path $Bundle -Filter "*-setup.exe" | Select-Object -First 1
 
 if ($Installer) {

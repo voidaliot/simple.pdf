@@ -325,6 +325,7 @@ fn kind_str(t: PdfPageAnnotationType) -> String {
         PdfPageAnnotationType::Strikeout => "strikeout",
         PdfPageAnnotationType::Text      => "text",
         PdfPageAnnotationType::Ink       => "ink",
+        PdfPageAnnotationType::Link      => "link",
         PdfPageAnnotationType::Widget    => "widget",
         PdfPageAnnotationType::Stamp     => "stamp",
         PdfPageAnnotationType::FreeText  => "freetext",

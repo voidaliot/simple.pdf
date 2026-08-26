@@ -37,7 +37,7 @@ pub fn init(
         .filter(|p| {
             p.extension()
                 .and_then(|e| e.to_str())
-                .map_or(false, |e| e.eq_ignore_ascii_case("pdf"))
+                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
         })
         .collect();
 
@@ -57,7 +57,7 @@ pub fn enqueue_file_args(app: &AppHandle, argv: Vec<String>) {
         let p = PathBuf::from(a);
         if p.extension()
             .and_then(|e| e.to_str())
-            .map_or(false, |e| e.eq_ignore_ascii_case("pdf"))
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
         {
             q.push(p);
         }

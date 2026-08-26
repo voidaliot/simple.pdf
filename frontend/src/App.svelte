@@ -44,12 +44,6 @@
       case "t": e.preventDefault(); tabs.openHome(); break;
       case "w": {
         e.preventDefault();
-        const active = tabs.active;
-        // FR-TAB-02: confirm close if tab is dirty
-        if (active?.dirty) {
-          const choice = confirm(`"${active.title}" has unsaved changes.\nDiscard changes and close?`);
-          if (!choice) break;
-        }
         tabs.close(tabs.activeId);
         break;
       }
@@ -71,19 +65,29 @@
 <div class="shell">
   <TabBar />
   <main class="content">
-    {#if tabs.active}
-      {#if tabs.active.kind === "home"}
-        <Home />
-      {:else if tabs.active.kind === "settings"}
-        <Settings />
-      {:else}
-        <Viewer tab={tabs.active} />
+    <div
+      class="tab-panel"
+      id={tabs.active ? `panel-${tabs.active.id}` : undefined}
+      role="tabpanel"
+      aria-labelledby={tabs.active ? `tab-${tabs.active.id}` : undefined}
+    >
+      {#if tabs.active}
+        {#if tabs.active.kind === "home"}
+          <Home />
+        {:else if tabs.active.kind === "settings"}
+          <Settings />
+        {:else}
+          {#key tabs.active.id}
+            <Viewer tab={tabs.active} />
+          {/key}
+        {/if}
       {/if}
-    {/if}
+    </div>
   </main>
 </div>
 
 <style>
   .shell { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
   .content { flex: 1; overflow: hidden; background: var(--bg); }
+  .tab-panel { height: 100%; overflow: hidden; }
 </style>

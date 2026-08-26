@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>simple.pdf</title>
+  <defs>
+    <linearGradient id="background" x1="176" y1="112" x2="848" y2="912" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7187F6" />
+      <stop offset="0.52" stop-color="#4D68E7" />
+      <stop offset="1" stop-color="#304FCB" />
+    </linearGradient>
+    <linearGradient id="flow" x1="390" y1="408" x2="650" y2="742" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5572EC" />
+      <stop offset="1" stop-color="#3150CE" />
+    </linearGradient>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#172B78" flood-opacity="0.30" />
+    </filter>
+  </defs>
+
+  <rect x="48" y="48" width="928" height="928" rx="240" fill="url(#background)" />
+  <path
+    d="M176 282C228 170 340 104 474 96H744C845 96 928 179 928 280V386C810 248 586 180 368 230C292 248 226 268 176 282Z"
+    fill="#FFFFFF"
+    opacity="0.09"
+  />
+
+  <g filter="url(#soft-shadow)">
+    <path
+      d="M314 164H574L738 328V802C738 836 710 864 676 864H314C280 864 252 836 252 802V226C252 192 280 164 314 164Z"
+      fill="#FFFFFF"
+    />
+    <path
+      d="M574 164V282C574 307 595 328 620 328H738L574 164Z"
+      fill="#DCE4FF"
+    />
+    <path
+      d="M628 442C574 394 435 392 388 446C333 509 407 552 510 574C610 596 681 637 635 704C588 772 449 773 386 716"
+      fill="none"
+      stroke="url(#flow)"
+      stroke-width="84"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>

@@ -1,3 +1,6 @@
+import { closeDocument } from "../lib/ipc";
+import { disposeViewerStore } from "./viewer.svelte";
+
 export type TabKind = "home" | "doc" | "settings";
 
 export interface Tab {
@@ -12,6 +15,11 @@ export interface Tab {
 
 let nextId = 1;
 const genId = () => `t${nextId++}`;
+
+/** Normalize a Windows document path for open-tab comparisons. */
+export function documentPathKey(path: string): string {
+  return path.replaceAll("/", "\\").toLowerCase();
+}
 
 // Pre-compute the initial tab id so activeId doesn't read a $state during
 // its own initializer (avoids the state_referenced_locally Svelte warning).
@@ -40,8 +48,21 @@ function createTabsStore() {
     return tab;
   }
 
+  function findByPath(path: string): Tab | undefined {
+    const key = documentPathKey(path);
+    return list.find((t) =>
+      t.kind === "doc" && t.path !== undefined && documentPathKey(t.path) === key
+    );
+  }
+
+  function activatePath(path: string): Tab | undefined {
+    const existing = findByPath(path);
+    if (existing) activeId = existing.id;
+    return existing;
+  }
+
   function openDoc(info: { id: string; path: string; title: string; pageCount: number }): Tab {
-    const existing = list.find((t) => t.path === info.path);
+    const existing = findByPath(info.path);
     if (existing) { activeId = existing.id; return existing; }
     const tab: Tab = {
       id: genId(),
@@ -57,20 +78,34 @@ function createTabsStore() {
     return tab;
   }
 
-  function close(id: string) {
+  function close(id: string): boolean {
     const idx = list.findIndex((t) => t.id === id);
-    if (idx === -1) return;
+    if (idx === -1) return false;
     const removed = list[idx]!;
+    if (removed.dirty) {
+      const discard = confirm(`"${removed.title}" has unsaved changes.\nDiscard changes and close?`);
+      if (!discard) return false;
+    }
+
     list = list.filter((t) => t.id !== id);
+
+    if (removed.docId) {
+      disposeViewerStore(removed.docId);
+      void closeDocument(removed.docId).catch((error: unknown) => {
+        console.error("failed to close document", error);
+      });
+    }
+
     if (list.length === 0) {
       const home = openHome();
       activeId = home.id;
-      return;
+      return true;
     }
     if (activeId === removed.id) {
       const fallback = list[Math.min(idx, list.length - 1)]!;
       activeId = fallback.id;
     }
+    return true;
   }
 
   function activate(id: string) {
@@ -95,6 +130,8 @@ function createTabsStore() {
     get active() { return active; },
     openHome,
     openSettings,
+    findByPath,
+    activatePath,
     openDoc,
     close,
     activate,

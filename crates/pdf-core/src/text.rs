@@ -51,7 +51,7 @@ impl Document {
 
                 if is_ws {
                     if !word.is_empty() {
-                        flush(&mut spans, &word, wl, wr, wt, wb, pw, ph);
+                        flush(&mut spans, &word, (wl, wr, wt, wb), (pw, ph));
                         word.clear();
                     }
                     continue;
@@ -84,7 +84,7 @@ impl Document {
                 }
             }
             if !word.is_empty() {
-                flush(&mut spans, &word, wl, wr, wt, wb, pw, ph);
+                flush(&mut spans, &word, (wl, wr, wt, wb), (pw, ph));
             }
 
             Ok(spans)
@@ -95,13 +95,11 @@ impl Document {
 fn flush(
     spans: &mut Vec<TextSpan>,
     text: &str,
-    wl: f32,
-    wr: f32,
-    wt: f32,
-    wb: f32,
-    pw: f32,
-    ph: f32,
+    bounds: (f32, f32, f32, f32),
+    page_size: (f32, f32),
 ) {
+    let (wl, wr, wt, wb) = bounds;
+    let (pw, ph) = page_size;
     let left = wl / pw;
     // Convert from PDF y-up to screen y-down: top_screen = 1 - top_pdf/ph
     let top = 1.0 - wt / ph;

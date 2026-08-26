@@ -1,7 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { openDocument, listFolderPdfs, downloadUrlToTemp, renderThumbB64 } from "./ipc";
-import { tabs } from "../stores/tabs.svelte";
+import { closeDocument, openDocument, listFolderPdfs, downloadUrlToTemp, renderThumbB64 } from "./ipc";
+import { documentPathKey, tabs } from "../stores/tabs.svelte";
 import { recents } from "../stores/recents.svelte";
+
+const openingByPath = new Map<string, Promise<void>>();
 
 export async function pickAndOpen(): Promise<void> {
   const selected = await open({
@@ -28,7 +30,37 @@ export async function openFromUrl(url: string): Promise<void> {
 }
 
 export async function openPath(path: string): Promise<void> {
+  const alreadyOpen = tabs.activatePath(path);
+  if (alreadyOpen) {
+    recents.add(alreadyOpen.path ?? path, alreadyOpen.title);
+    return;
+  }
+
+  const key = documentPathKey(path);
+  const pending = openingByPath.get(key);
+  if (pending) {
+    await pending;
+    return;
+  }
+
+  const opening = openNewPath(path).finally(() => {
+    openingByPath.delete(key);
+  });
+  openingByPath.set(key, opening);
+  await opening;
+}
+
+async function openNewPath(path: string): Promise<void> {
   const doc = await openDocument(path);
+
+  // A differently-spelled equivalent path may have opened while IPC was in flight.
+  const alreadyOpen = tabs.activatePath(doc.path);
+  if (alreadyOpen) {
+    await closeDocument(doc.id);
+    recents.add(alreadyOpen.path ?? doc.path, alreadyOpen.title);
+    return;
+  }
+
   recents.add(doc.path, doc.title);
   tabs.openDoc({
     id: doc.id,

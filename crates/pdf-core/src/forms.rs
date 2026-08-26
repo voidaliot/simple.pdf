@@ -196,7 +196,7 @@ impl Document {
             let pages = doc.pages();
             let page_count = pages.len();
             for pi in 0..page_count {
-                let page = match pages.get(pi as u16) {
+                let page = match pages.get(pi) {
                     Ok(p) => p,
                     Err(_) => continue,
                 };

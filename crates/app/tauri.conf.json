@@ -17,12 +17,16 @@
         "height": 840,
         "minWidth": 720,
         "minHeight": 480,
-        "decorations": true,
-        "resizable": true
+        "decorations": false,
+        "shadow": true,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: pdf://localhost thumb://localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: pdf://localhost thumb://localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {

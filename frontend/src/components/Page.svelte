@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { renderPagePixels, type TextSpan, type Annotation, type AnnRect, type FormField } from "../lib/ipc";
+  import { CSS_PIXELS_PER_POINT } from "../stores/viewer.svelte";
 
   export interface Highlight {
     left: number;
@@ -9,46 +11,12 @@
   }
 
   // ── Named constants ──────────────────────────────────────────────────────────
-  /** Debounce ms before re-rendering after a zoom change. */
-  const ZOOM_DEBOUNCE_MS = 250;
-  /** Max cached render entries across all pages (LRU eviction). */
-  const MAX_CACHE_ENTRIES = 40;
-
-  // ── Module-level render cache (survives Svelte component re-creation) ────────
-  //
-  // Key: `${docId}|${pageIndex}|${scaleTo3dp}|${dprTo2dp}`
-  // Stores the last rendered RGBA pixels so zoom changes that return to a
-  // previously-seen scale are instant.  Evicted LRU-style when the cache
-  // grows beyond MAX_CACHE_ENTRIES.
-  interface CachedFrame {
-    width: number;
-    height: number;
-    data: Uint8ClampedArray<ArrayBuffer>;
-  }
-  const _cache = new Map<string, CachedFrame>();
-
-  function cacheKey(docId: string, idx: number, scale: number, dpr: number): string {
-    return `${docId}|${idx}|${scale.toFixed(3)}|${dpr.toFixed(2)}`;
-  }
-
-  function cacheGet(key: string): CachedFrame | undefined {
-    const v = _cache.get(key);
-    if (v) {
-      // Refresh LRU order
-      _cache.delete(key);
-      _cache.set(key, v);
-    }
-    return v;
-  }
-
-  function cachePut(key: string, frame: CachedFrame): void {
-    _cache.set(key, frame);
-    // Evict oldest entries
-    while (_cache.size > MAX_CACHE_ENTRIES) {
-      const first = _cache.keys().next().value;
-      if (first !== undefined) _cache.delete(first);
-    }
-  }
+  /** Short delay lets a visible page start before its prefetch neighbours. */
+  const PREFETCH_RENDER_DELAY_MS = 90;
+  /** Coalesce rapid zoom steps before they enter PDFium's serialized queue. */
+  const VISIBLE_RENDER_DELAY_MS = 35;
+  /** Full-page bitmaps need a hard ceiling until the renderer is tiled. */
+  const MAX_RENDER_PIXELS = 10_000_000;
 
   type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "ink";
 
@@ -61,10 +29,12 @@
     width: number;
     /** Page height in PDF points. */
     height: number;
-    /** Current zoom factor (CSS pixels per PDF point). */
+    /** Semantic zoom factor where 1.0 means 100% (96 CSS dpi). */
     zoom: number;
     /** Whether this page is currently in the viewport or prefetch zone. */
     visible: boolean;
+    /** True when the page intersects the real viewport (not only the prefetch zone). */
+    priority?: boolean;
     /** Visual rotation in degrees (0 | 90 | 180 | 270). */
     rotation?: number;
     textSpans?: TextSpan[];
@@ -79,7 +49,7 @@
     activeTool?: AnnotTool;
     inkColor?: [number, number, number];
     inkWidth?: number;
-    onPageClick?: (e: MouseEvent, el: HTMLElement, cssW: number, cssH: number) => void;
+    onPageClick?: (left: number, top: number) => void;
     onTextSelected?: (rects: AnnRect[]) => void;
     onInkStroke?: (paths: [number, number][][]) => void;
     onDeleteAnnotation?: (annotIndex: number) => void;
@@ -89,7 +59,7 @@
   }
 
   let {
-    docId, pageIndex, width, height, zoom, visible,
+    docId, pageIndex, width, height, zoom, visible, priority = false,
     rotation = 0,
     textSpans, highlights, activeHighlight = -1,
     annotations,
@@ -103,12 +73,19 @@
     onFieldText, onFieldChecked, onPushButton,
   }: Props = $props();
 
-  const dpr = window.devicePixelRatio ?? 1;
-  const renderScale = $derived(zoom * dpr);
+  // Cap DPR to keep full-page backing stores within a predictable memory budget.
+  // The canvas is still laid out at the native CSS size and the browser smooths
+  // the rare high-zoom case where the render budget is reached.
+  const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  const cssScale = $derived(zoom * CSS_PIXELS_PER_POINT);
+  const maxRenderScale = $derived(
+    Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, width * height)),
+  );
+  const renderScale = $derived(Math.min(cssScale * dpr, maxRenderScale));
 
   // Pre-rotation CSS dimensions
-  const cssW = $derived(Math.round(width * zoom));
-  const cssH = $derived(Math.round(height * zoom));
+  const cssW = $derived(Math.max(1, Math.round(width * cssScale)));
+  const cssH = $derived(Math.max(1, Math.round(height * cssScale)));
 
   // Post-rotation layout dimensions
   const isRotated = $derived(rotation === 90 || rotation === 270);
@@ -126,11 +103,13 @@
   let renderError = $state("");
   /** True while a network render is in-flight (not a cache hit). */
   let rendering = $state(false);
-  /** Timer for zoom-change debounce. */
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Incremented by the retry action to re-run the render effect. */
+  let retryVersion = $state(0);
+  let renderGeneration = 0;
+  let lastPaintedKey = "";
 
   /** Paint a cached or freshly-rendered frame onto the canvas. */
-  function paint(frame: CachedFrame) {
+  function paint(frame: { width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> }) {
     const canvas = canvasEl;
     if (!canvas) return;
     // Setting canvas.width clears the buffer; putImageData follows in the
@@ -138,56 +117,82 @@
     canvas.width = frame.width;
     canvas.height = frame.height;
     const ctx = canvas.getContext("2d", { alpha: false });
-    if (!ctx) return;
+    if (!ctx) {
+      rendering = false;
+      renderError = "Canvas rendering is unavailable";
+      return;
+    }
     ctx.putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
     hasContent = true;
     renderError = "";
     rendering = false;
   }
 
+  function releaseCanvas() {
+    const canvas = canvasEl;
+    if (!canvas) return;
+    canvas.width = 1;
+    canvas.height = 1;
+    hasContent = false;
+    rendering = false;
+    lastPaintedKey = "";
+  }
+
+  function retryRender() {
+    renderError = "";
+    retryVersion += 1;
+  }
+
   $effect(() => {
-    if (!visible) return;
+    const canvas = canvasEl;
+    if (!canvas) return;
+
+    if (!visible) {
+      // Release large backing stores once a page is safely outside the prefetch
+      // range. A short grace period prevents churn at observer boundaries.
+      const releaseTimer = setTimeout(releaseCanvas, 250);
+      return () => clearTimeout(releaseTimer);
+    }
 
     const id = docId;
     const idx = pageIndex;
     const scale = renderScale;
-    void annotationsVersion; // Re-render when annotations change
-    let cancelled = false;
-
-    const key = cacheKey(id, idx, scale, dpr);
-
-    // Cache hit → paint immediately, no IPC call
-    const cached = cacheGet(key);
-    if (cached) {
-      paint(cached);
+    const frameKey = `${id}:${idx}:${scale.toFixed(5)}:${annotationsVersion}:${retryVersion}`;
+    if (lastPaintedKey === frameKey) {
+      rendering = false;
       return;
     }
 
-    // Cache miss → debounce then render
-    // While the debounce is waiting, keep the existing canvas content visible
-    // (old-zoom pixels stay on screen, just rescaled by CSS — better than blank).
-    if (debounceTimer !== null) clearTimeout(debounceTimer);
+    // Priority affects only the initial scheduling delay. Do not make it an
+    // effect dependency: crossing the prefetch/viewport boundary must not
+    // cancel and duplicate an otherwise identical render.
+    const delay = untrack(() => priority)
+      ? VISIBLE_RENDER_DELAY_MS
+      : PREFETCH_RENDER_DELAY_MS;
+    const generation = ++renderGeneration;
+    let cancelled = false;
     rendering = true;
 
-    debounceTimer = setTimeout(() => {
+    // Keep the previous frame visible while the replacement is in flight.
+    const renderTimer = setTimeout(() => {
       if (cancelled) return;
 
       renderPagePixels(id, idx, scale)
         .then((frame) => {
-          if (cancelled) return;
-          cachePut(key, frame);
+          if (cancelled || generation !== renderGeneration) return;
+          lastPaintedKey = frameKey;
           paint(frame);
         })
         .catch((e: unknown) => {
-          if (cancelled) return;
+          if (cancelled || generation !== renderGeneration) return;
           renderError = String(e);
           rendering = false;
         });
-    }, ZOOM_DEBOUNCE_MS);
+    }, delay);
 
     return () => {
       cancelled = true;
-      if (debounceTimer !== null) { clearTimeout(debounceTimer); debounceTimer = null; }
+      clearTimeout(renderTimer);
     };
   });
 
@@ -262,34 +267,71 @@
   });
 
   // ── Text selection → annotation rects ────────────────────────────────────────
-  function onPointerUp() {
+  function clientToPage(clientX: number, clientY: number, pageEl: HTMLElement) {
+    const rect = pageEl.getBoundingClientRect();
+    const displayX = (clientX - rect.left) / Math.max(1, rect.width);
+    const displayY = (clientY - rect.top) / Math.max(1, rect.height);
+
+    const point = rotation === 90
+      ? { nx: displayY, ny: 1 - displayX }
+      : rotation === 180
+        ? { nx: 1 - displayX, ny: 1 - displayY }
+        : rotation === 270
+          ? { nx: 1 - displayY, ny: displayX }
+          : { nx: displayX, ny: displayY };
+
+    return {
+      nx: Math.max(0, Math.min(1, point.nx)),
+      ny: Math.max(0, Math.min(1, point.ny)),
+    };
+  }
+
+  function onPointerUp(e: PointerEvent) {
     if (!["highlight", "underline", "strikeout"].includes(activeTool)) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return;
     const range = sel.getRangeAt(0);
     const rects: AnnRect[] = [];
+    const pageEl = (e.currentTarget as HTMLElement).parentElement;
+    if (!pageEl) return;
+    const pageRect = pageEl.getBoundingClientRect();
     for (const r of range.getClientRects()) {
-      const pageEl = inkCanvas?.parentElement;
-      if (!pageEl) continue;
-      const pr = pageEl.getBoundingClientRect();
+      const clippedLeft = Math.max(r.left, pageRect.left);
+      const clippedTop = Math.max(r.top, pageRect.top);
+      const clippedRight = Math.min(r.right, pageRect.right);
+      const clippedBottom = Math.min(r.bottom, pageRect.bottom);
+      if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) continue;
+      const corners = [
+        clientToPage(clippedLeft, clippedTop, pageEl),
+        clientToPage(clippedRight, clippedTop, pageEl),
+        clientToPage(clippedRight, clippedBottom, pageEl),
+        clientToPage(clippedLeft, clippedBottom, pageEl),
+      ];
+      const left = Math.min(...corners.map((point) => point.nx));
+      const top = Math.min(...corners.map((point) => point.ny));
+      const right = Math.max(...corners.map((point) => point.nx));
+      const bottom = Math.max(...corners.map((point) => point.ny));
       rects.push({
-        left: (r.left - pr.left) / cssW,
-        top: (r.top - pr.top) / cssH,
-        width: r.width / cssW,
-        height: r.height / cssH,
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
       });
     }
     if (rects.length > 0) onTextSelected?.(rects);
   }
 
   function normPos(e: PointerEvent, el: HTMLElement) {
-    const r = el.getBoundingClientRect();
-    return { nx: (e.clientX - r.left) / el.clientWidth, ny: (e.clientY - r.top) / el.clientHeight };
+    return clientToPage(e.clientX, e.clientY, el);
   }
 
-  function annColor(c: [number, number, number, number]) {
-    return `rgba(${c[0]},${c[1]},${c[2]},${c[3] / 255})`;
+  function capturePageClick(e: MouseEvent) {
+    const pageEl = (e.currentTarget as HTMLElement).parentElement;
+    if (!pageEl) return;
+    const { nx, ny } = clientToPage(e.clientX, e.clientY, pageEl);
+    onPageClick?.(nx, ny);
   }
+
 </script>
 
 <div
@@ -297,7 +339,7 @@
   style:width="{displayW}px"
   style:height="{displayH}px"
   aria-label="Page {pageIndex + 1}"
-  role="img"
+  role="group"
 >
   <div
     class="page-inner"
@@ -313,14 +355,16 @@
       by the render effect to match the device-pixel render.
       background: white prevents any transparent bleed-through.
     -->
-    <canvas
-      bind:this={canvasEl}
-      class="page-canvas"
-      class:page-canvas-visible={hasContent}
-      style:width="{cssW}px"
-      style:height="{cssH}px"
-      aria-hidden="true"
-    ></canvas>
+    <div class="page-raster" role="img" aria-label="Rendered page {pageIndex + 1}">
+      <canvas
+        bind:this={canvasEl}
+        class="page-canvas"
+        class:page-canvas-visible={hasContent}
+        style:width="{cssW}px"
+        style:height="{cssH}px"
+        aria-hidden="true"
+      ></canvas>
+    </div>
 
     <!-- Skeleton: shown while loading for the first time -->
     {#if !hasContent && !renderError}
@@ -334,23 +378,28 @@
     <!-- Error overlay -->
     {#if renderError}
       <div class="error-overlay" title={renderError}>
-        <span>⚠ render failed</span>
+        <strong>Page could not be rendered</strong>
         <small class="error-detail">{renderError.slice(0, 120)}</small>
+        <button type="button" onclick={retryRender}>Retry</button>
       </div>
     {/if}
 
-    <!-- Existing annotations (read from PDF) -->
+    <!--
+      PDFium is the sole visual renderer for existing annotations. These are
+      transparent hit targets only; painting their coarse bounding rectangles
+      here would double-render highlights and turn ink/link/stamp bounds into
+      solid blocks.
+    -->
     {#if annotations && annotations.length > 0}
-      <div class="annot-layer" aria-hidden="true">
+      <div class="annot-layer">
         {#each annotations as ann}
-          {#if ann.kind !== "widget"}
+          {#if ann.kind !== "widget" && ann.kind !== "other"}
             <div
-              class="annot-rect annot-{ann.kind}"
+              class="annot-rect"
               style:left="{ann.rect.left * cssW}px"
               style:top="{ann.rect.top * cssH}px"
               style:width="{ann.rect.width * cssW}px"
               style:height="{ann.rect.height * cssH}px"
-              style:background={ann.kind === "text" ? "none" : annColor(ann.color)}
               title={ann.contents ?? ann.kind}
               role="button"
               tabindex="0"
@@ -358,14 +407,7 @@
               ondblclick={() => onDeleteAnnotation?.(ann.index)}
               onkeydown={(e) => { if (e.key === "Delete") onDeleteAnnotation?.(ann.index); }}
             >
-              {#if ann.kind === "text"}
-                <span class="sticky-icon" style:color={annColor(ann.color)}>📌</span>
-                {#if ann.contents}<div class="sticky-popup">{ann.contents}</div>{/if}
-              {:else if ann.kind === "strikeout"}
-                <div class="strikeout-line" style:background={annColor(ann.color)}></div>
-              {:else if ann.kind === "underline"}
-                <div class="underline-line" style:background={annColor(ann.color)}></div>
-              {/if}
+              {#if ann.contents}<div class="sticky-popup">{ann.contents}</div>{/if}
             </div>
           {/if}
         {/each}
@@ -384,7 +426,7 @@
             style:width="{span.width * cssW}px"
             style:height="{span.height * cssH}px"
             style:font-size="{Math.max(1, span.height * cssH)}px"
-          >{span.text}</span>
+          >{span.text}{" "}</span>
         {/each}
       </div>
     {/if}
@@ -418,7 +460,7 @@
                 style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
                 style:font-size="{Math.max(8, field.rect.height * cssH * 0.6)}px"
                 value={field.value} disabled={xfaReadOnly} aria-label={field.name || "Text field"}
-                onchange={(e) => onFieldText?.(field.index, (e.target as HTMLTextAreaElement).value)}
+                oninput={(e) => onFieldText?.(field.index, (e.target as HTMLTextAreaElement).value)}
               ></textarea>
             {:else}
               <input type="text" class="form-field form-text"
@@ -426,7 +468,7 @@
                 style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
                 style:font-size="{Math.max(8, field.rect.height * cssH * 0.75)}px"
                 value={field.value} disabled={xfaReadOnly} aria-label={field.name || "Text field"}
-                onchange={(e) => onFieldText?.(field.index, (e.target as HTMLInputElement).value)}
+                oninput={(e) => onFieldText?.(field.index, (e.target as HTMLInputElement).value)}
               />
             {/if}
           {:else if field.kind === "checkbox"}
@@ -462,6 +504,10 @@
               style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
               style:font-size="{Math.max(8, field.rect.height * cssH * 0.5)}px"
               disabled={xfaReadOnly} aria-label={field.name || "List"}
+              onchange={(e) => onFieldText?.(
+                field.index,
+                Array.from((e.target as HTMLSelectElement).selectedOptions).map((option) => option.value).join(","),
+              )}
             >
               {#each field.options as opt}
                 <option value={opt} selected={opt === field.value}>{opt}</option>
@@ -498,7 +544,7 @@
     {#if activeTool === "text"}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="click-capture" role="presentation"
-        onclick={(e) => onPageClick?.(e, e.currentTarget.parentElement as HTMLElement, cssW, cssH)}>
+        onclick={capturePageClick}>
       </div>
     {/if}
   </div>
@@ -523,6 +569,10 @@
   }
 
   /* Page canvas */
+  .page-raster {
+    position: absolute;
+    inset: 0;
+  }
   .page-canvas {
     display: block;
     position: absolute;
@@ -588,17 +638,20 @@
     word-break: break-all; text-align: center; opacity: 0.8;
   }
 
-  /* Annotations */
+  .error-overlay button {
+    margin-top: 4px; padding: 5px 12px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-elev); color: var(--fg); cursor: pointer;
+  }
+  .error-overlay button:hover { border-color: var(--accent); }
+
+  /* Transparent annotation interaction layer; PDFium paints appearances. */
   .annot-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
   .annot-rect {
     position: absolute; border-radius: 2px;
-    pointer-events: auto; cursor: default;
+    pointer-events: auto; cursor: default; background: transparent;
   }
-  .annot-highlight { mix-blend-mode: multiply; }
-  .annot-underline, .annot-squiggly, .annot-strikeout { background: transparent !important; }
-  .underline-line { position: absolute; bottom: 1px; left: 0; right: 0; height: 2px; }
-  .strikeout-line { position: absolute; top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
-  .sticky-icon { font-size: 16px; line-height: 1; display: block; }
+  .annot-rect:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent); }
   .sticky-popup {
     position: absolute; left: 20px; top: 0;
     min-width: 160px; max-width: 240px;

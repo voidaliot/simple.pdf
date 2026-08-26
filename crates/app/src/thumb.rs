@@ -54,7 +54,7 @@ fn render<R: Runtime>(
     let doc = state.engine.open(path).map_err(|e| e.to_string())?;
     let sizes = doc.page_sizes().map_err(|e| e.to_string())?;
     let page_w = sizes.first().map(|s| s.width).unwrap_or(612.0);
-    let scale = (max_w / page_w).min(1.0).max(0.05);
+    let scale = (max_w / page_w).clamp(0.05, 1.0);
     doc.render_page_jpeg(RenderRequest { page_index: 0, scale })
         .map_err(|e| e.to_string())
 }
