@@ -1,8 +1,10 @@
 # simple.pdf — Requirements
 
-Authoritative list of what simple.pdf v1 must do and how well it must do it. Progress against these is tracked in [plan.md](plan.md).
+Authoritative list of what simple.pdf v1 must do and how well it must do it.
 
 **Status:** `[ ]` pending · `[x]` implemented
+
+Implementation status was last audited against the source on 2026-08-26. A requirement is checked only when every clause is implemented; partially implemented requirements remain unchecked.
 
 Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change once assigned; new requirements get the next free number.
 
@@ -10,24 +12,24 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 
 ## 1. Functional — Viewing (FR-VIEW)
 
-- [ ] **FR-VIEW-01** — User can open a PDF via File → Open, drag-drop into the window, or `simple.pdf.exe <path>` CLI argument.
+- [x] **FR-VIEW-01** — User can open a PDF via File → Open, drag-drop into the window, or `simple.pdf.exe <path>` CLI argument.
 - [ ] **FR-VIEW-02** — User can navigate pages: mouse-wheel scroll, keyboard (PgUp/PgDn/Home/End), thumbnail sidebar, goto-page input.
-- [ ] **FR-VIEW-03** — User can select text with the mouse and copy to clipboard (Ctrl+C).
-- [ ] **FR-VIEW-04** — Find-in-page (Ctrl+F): live-highlight all matches, next/prev with Enter/Shift+Enter, match counter.
-- [ ] **FR-VIEW-05** — Zoom 25%–400% plus fit-width and fit-page presets; pinch and Ctrl+Wheel to zoom.
+- [x] **FR-VIEW-03** — User can select text with the mouse and copy to clipboard (Ctrl+C).
+- [x] **FR-VIEW-04** — Find-in-page (Ctrl+F): live-highlight all matches, next/prev with Enter/Shift+Enter, match counter.
+- [x] **FR-VIEW-05** — Zoom 25%–400% plus fit-width and fit-page presets; pinch and Ctrl+Wheel to zoom.
 - [ ] **FR-VIEW-06** — Rotate current page 90° / 180° / 270° for viewing (does not modify the PDF).
 
 ## 2. Functional — Tabs & Home (FR-TAB, FR-HOME)
 
-- [ ] **FR-TAB-01** — Browser-style tab bar at the top; each open PDF gets a tab; `+` button opens a home tab.
+- [x] **FR-TAB-01** — Browser-style tab bar at the top; each open PDF gets a tab; `+` button opens a home tab.
 - [ ] **FR-TAB-02** — Closing a tab with unsaved changes prompts the user (Save / Discard / Cancel).
-- [ ] **FR-TAB-03** — Tabs reorderable by drag.
-- [ ] **FR-TAB-04** — Middle-click on a tab closes it.
+- [x] **FR-TAB-03** — Tabs reorderable by drag.
+- [x] **FR-TAB-04** — Middle-click on a tab closes it.
 - [ ] **FR-HOME-01** — Home tab shows a grid of recent files with first-page thumbnails (configurable limit, default 50).
-- [ ] **FR-HOME-02** — User can pin/unpin files; pinned section renders above recents.
+- [x] **FR-HOME-02** — User can pin/unpin files; pinned section renders above recents.
 - [ ] **FR-HOME-03** — Filter-as-you-type search over recents (filename, fuzzy).
 - [ ] **FR-HOME-04** — Quick actions on home: Open File, Open Folder (lists PDFs in folder), Paste URL (download then open).
-- [ ] **FR-HOME-05** — Right-click on a recent: Open, Remove from list, Reveal in Explorer, Copy path.
+- [x] **FR-HOME-05** — Right-click on a recent: Open, Remove from list, Reveal in Explorer, Copy path.
 
 ## 3. Functional — Annotations (FR-ANN)
 
@@ -42,15 +44,15 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 ## 4. Functional — Forms (FR-FORM)
 
 - [x] **FR-FORM-01** — Detect AcroForm fields and render interactive inputs over them for: text, multi-line text, checkbox, radio, combobox (dropdown), listbox, push button.
-- [x] **FR-FORM-02** — On save, field values persist in the PDF and regenerated appearances are written so other readers display the filled form.
+- [ ] **FR-FORM-02** — On save, field values persist in the PDF and regenerated appearances are written so other readers display the filled form.
 - [x] **FR-FORM-03** — Detect XFA-only forms (via `/XFA` in the catalog) and show a non-blocking banner: "This is an XFA form — some fields may not render. Open in Adobe Reader for full fidelity."
-- [x] **FR-FORM-04** — Respect form reset action buttons when the PDF defines them.
+- [ ] **FR-FORM-04** — Respect form reset action buttons when the PDF defines them.
 
 ## 5. Functional — Signing (FR-SIGN)
 
 - [ ] **FR-SIGN-01** — Signature-capture modal: user can draw on a canvas with mouse/pen, or import a PNG/JPG. Output is a transparent-background bitmap plus vector paths (for ink).
 - [ ] **FR-SIGN-02** — User places a captured signature as a stamp annotation (`/Stamp`) with a correct AP stream, resizable and movable before finalizing.
-- [x] **FR-SIGN-03** — Manage saved signatures: list, rename, mark default, delete. Stored under the app's data folder.
+- [ ] **FR-SIGN-03** — Manage saved signatures: list, rename, mark default, delete. Stored under the app's data folder.
 
 ## 6. Non-Functional (NFR)
 
@@ -62,7 +64,7 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 
 ## 7. UX
 
-- [ ] **UX-THEME-01** — App auto-follows Windows light/dark setting; user override persists across restarts.
+- [x] **UX-THEME-01** — App auto-follows Windows light/dark setting; user override persists across restarts.
 - [ ] **UX-KBD-01** — Browser-like shortcuts: Ctrl+T (new tab), Ctrl+W (close tab), Ctrl+Tab / Ctrl+Shift+Tab (switch), Ctrl+O (open), Ctrl+F (find), Ctrl+S (save), Ctrl+P (print).
 - [ ] **UX-DESIGN-01** — Minimalistic chrome: single top bar combining tabs + primary toolbar; optional collapsible sidebar for thumbnails/comments; no ribbons.
 - [ ] **UX-ZOOM-01** — Zoom level persists per-document across sessions.
@@ -77,9 +79,9 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 
 ## 9. Security & Privacy (SEC)
 
-- [ ] **SEC-NET-01** — Zero outbound network requests in default configuration. URL-paste feature requires an explicit user action per use.
-- [ ] **SEC-JS-01** — PDF JavaScript execution is disabled (PDFium OSS default). Documents cannot run scripts.
-- [ ] **SEC-SAVE-01** — Saves write to a temp file then atomic-rename over the original; original is preserved until success.
+- [x] **SEC-NET-01** — Zero outbound network requests in default configuration. URL-paste feature requires an explicit user action per use.
+- [x] **SEC-JS-01** — PDF JavaScript execution is disabled (PDFium OSS default). Documents cannot run scripts.
+- [x] **SEC-SAVE-01** — Saves write to a temp file then atomic-rename over the original; original is preserved until success.
 - [x] **SEC-LOG-01** — Logs are local-only under the app data folder. No telemetry without explicit opt-in. No personally identifying information in logs.
 
 ---
