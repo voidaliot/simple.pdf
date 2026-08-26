@@ -2766,7 +2766,7 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pdf-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3994,7 +3994,7 @@ dependencies = [
 
 [[package]]
 name = "shared-types"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "ts-rs",
@@ -4057,7 +4057,7 @@ checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
 name = "simple-pdf-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
