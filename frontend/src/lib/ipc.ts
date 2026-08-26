@@ -290,8 +290,8 @@ export async function getPdfAssociation(): Promise<boolean> {
   return invoke<boolean>("get_pdf_association");
 }
 
-export async function setPdfAssociation(enable: boolean): Promise<void> {
-  return invoke("set_pdf_association", { enable });
+export async function configurePdfAssociation(): Promise<void> {
+  return invoke("configure_pdf_association");
 }
 
 // ── Network ───────────────────────────────────────────────────────────────────

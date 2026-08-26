@@ -7,7 +7,7 @@ A fast, small-footprint, modern PDF reader for Windows with annotations, AcroFor
 
 ## Status
 
-Version 1.0.0 is under active development. Working first version available. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status.
+Current release: 1.0.1. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Design goals
 
@@ -74,6 +74,15 @@ Create release artifacts with the supplied scripts:
 
 # target\x86_64-pc-windows-msvc\release\bundle\nsis\*-setup.exe
 # Requires NSIS 3.x on PATH.
+.\scripts\build-installer.ps1
+```
+
+Public releases should be Authenticode-signed with a trusted code-signing certificate. The build scripts enable Tauri signing when both variables below are set; without them, they emit an explicit unsigned-build warning:
+
+```powershell
+$env:SIMPLE_PDF_CERTIFICATE_THUMBPRINT = "<certificate SHA-1 thumbprint>"
+$env:SIMPLE_PDF_TIMESTAMP_URL = "<certificate provider timestamp URL>"
+.\scripts\build-portable.ps1
 .\scripts\build-installer.ps1
 ```
 

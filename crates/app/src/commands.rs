@@ -45,7 +45,12 @@ pub async fn open_document(
         .unwrap_or("untitled")
         .to_string();
     state.docs.lock().insert(id, Arc::new(doc));
-    Ok(OpenedDocument { id: id.to_string(), path, title, page_count })
+    Ok(OpenedDocument {
+        id: id.to_string(),
+        path,
+        title,
+        page_count,
+    })
 }
 
 #[tauri::command]
@@ -135,7 +140,10 @@ pub async fn render_thumb_b64(
         let page_w = sizes.first().map(|s| s.width).unwrap_or(612.0);
         let scale = (max_w / page_w).clamp(0.05, 1.0);
         let bytes = doc
-            .render_page_jpeg(pdf_core::RenderRequest { page_index: 0, scale })
+            .render_page_jpeg(pdf_core::RenderRequest {
+                page_index: 0,
+                scale,
+            })
             .map_err(|e| e.to_string())?;
         Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
     })
@@ -149,7 +157,10 @@ pub async fn get_page_sizes(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<PageSize>, String> {
-    with_doc(&id, &state, |doc| doc.page_sizes().map_err(|e| e.to_string())).await
+    with_doc(&id, &state, |doc| {
+        doc.page_sizes().map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -194,10 +205,15 @@ pub async fn add_highlight_annotation(
             .map_err(|e| e.to_string())
     })
     .await?;
-    state.undo_stacks.lock()
+    state
+        .undo_stacks
+        .lock()
         .entry(uid)
         .or_default()
-        .push(crate::state::UndoEntry { page_index, annot_index: idx });
+        .push(crate::state::UndoEntry {
+            page_index,
+            annot_index: idx,
+        });
     Ok(idx)
 }
 
@@ -218,10 +234,15 @@ pub async fn add_underline_annotation(
             .map_err(|e| e.to_string())
     })
     .await?;
-    state.undo_stacks.lock()
+    state
+        .undo_stacks
+        .lock()
         .entry(uid)
         .or_default()
-        .push(crate::state::UndoEntry { page_index, annot_index: idx });
+        .push(crate::state::UndoEntry {
+            page_index,
+            annot_index: idx,
+        });
     Ok(idx)
 }
 
@@ -240,10 +261,15 @@ pub async fn add_strikeout_annotation(
             .map_err(|e| e.to_string())
     })
     .await?;
-    state.undo_stacks.lock()
+    state
+        .undo_stacks
+        .lock()
         .entry(uid)
         .or_default()
-        .push(crate::state::UndoEntry { page_index, annot_index: idx });
+        .push(crate::state::UndoEntry {
+            page_index,
+            annot_index: idx,
+        });
     Ok(idx)
 }
 
@@ -268,10 +294,15 @@ pub async fn add_text_annotation(
             .map_err(|e| e.to_string())
     })
     .await?;
-    state.undo_stacks.lock()
+    state
+        .undo_stacks
+        .lock()
         .entry(uid)
         .or_default()
-        .push(crate::state::UndoEntry { page_index, annot_index: idx });
+        .push(crate::state::UndoEntry {
+            page_index,
+            annot_index: idx,
+        });
     Ok(idx)
 }
 
@@ -291,10 +322,15 @@ pub async fn add_ink_annotation(
             .map_err(|e| e.to_string())
     })
     .await?;
-    state.undo_stacks.lock()
+    state
+        .undo_stacks
+        .lock()
         .entry(uid)
         .or_default()
-        .push(crate::state::UndoEntry { page_index, annot_index: idx });
+        .push(crate::state::UndoEntry {
+            page_index,
+            annot_index: idx,
+        });
     Ok(idx)
 }
 
@@ -348,7 +384,10 @@ pub async fn undo_annotation(
 
 #[tauri::command]
 pub async fn get_form_type(id: String, state: State<'_, AppState>) -> Result<String, String> {
-    with_doc(&id, &state, |doc| doc.form_type().map_err(|e| e.to_string())).await
+    with_doc(&id, &state, |doc| {
+        doc.form_type().map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -406,10 +445,7 @@ pub async fn reset_form_fields(
 }
 
 #[tauri::command]
-pub async fn reset_all_form_fields(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn reset_all_form_fields(id: String, state: State<'_, AppState>) -> Result<(), String> {
     with_doc(&id, &state, |doc| {
         doc.reset_all_form_fields().map_err(|e| e.to_string())
     })
@@ -464,21 +500,47 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn download_url_to_temp(url: String) -> Result<String, String> {
-    let bytes = reqwest::get(&url)
+    const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
+
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "Enter a valid HTTP or HTTPS URL")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only HTTP and HTTPS URLs are supported".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut response = client
+        .get(parsed)
+        .send()
         .await
         .map_err(|e| e.to_string())?
-        .bytes()
-        .await
+        .error_for_status()
         .map_err(|e| e.to_string())?;
+
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_DOWNLOAD_BYTES as u64)
+    {
+        return Err("PDF download exceeds the 100 MB limit".into());
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_DOWNLOAD_BYTES {
+            return Err("PDF download exceeds the 100 MB limit".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
 
     if bytes.len() < 5 || &bytes[0..5] != b"%PDF-" {
         return Err("URL did not return a valid PDF".into());
     }
 
-    let tmp = std::env::temp_dir().join(format!(
-        "simplepdf_{}.pdf",
-        Uuid::new_v4().as_simple()
-    ));
+    let tmp = std::env::temp_dir().join(format!("simplepdf_{}.pdf", Uuid::new_v4().as_simple()));
     std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
     Ok(tmp.to_string_lossy().into_owned())
 }
@@ -489,62 +551,17 @@ pub async fn download_url_to_temp(url: String) -> Result<String, String> {
 pub fn get_pdf_association() -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
-        use winreg::enums::HKEY_CURRENT_USER;
-        use winreg::RegKey;
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        if let Ok(key) = hkcu.open_subkey("Software\\Classes\\.pdf") {
-            let current: String = key.get_value("").unwrap_or_default();
-            return Ok(current == "SimplePDF.Document");
-        }
-        Ok(false)
+        crate::windows_integration::is_default_pdf_handler()
     }
     #[cfg(not(target_os = "windows"))]
     Ok(false)
 }
 
 #[tauri::command]
-pub fn set_pdf_association(enable: bool) -> Result<(), String> {
+pub fn configure_pdf_association() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use winreg::enums::{KEY_SET_VALUE, HKEY_CURRENT_USER};
-        use winreg::RegKey;
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-
-        if enable {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let cmd = format!("\"{}\" \"%1\"", exe.display());
-
-            let (k, _) = hkcu
-                .create_subkey("Software\\Classes\\.pdf")
-                .map_err(|e| e.to_string())?;
-            k.set_value("", &"SimplePDF.Document").map_err(|e| e.to_string())?;
-
-            let (k, _) = hkcu
-                .create_subkey("Software\\Classes\\SimplePDF.Document")
-                .map_err(|e| e.to_string())?;
-            k.set_value("", &"PDF Document").map_err(|e| e.to_string())?;
-
-            let (k, _) = hkcu
-                .create_subkey(
-                    "Software\\Classes\\SimplePDF.Document\\shell\\open\\command",
-                )
-                .map_err(|e| e.to_string())?;
-            k.set_value("", &cmd.as_str()).map_err(|e| e.to_string())?;
-
-        } else {
-            // Remove only if we set it
-            if let Ok(k) = hkcu.open_subkey_with_flags(
-                "Software\\Classes\\.pdf",
-                KEY_SET_VALUE,
-            ) {
-                let cur: String = k.get_value("").unwrap_or_default();
-                if cur == "SimplePDF.Document" {
-                    let _ = hkcu.delete_subkey_all("Software\\Classes\\.pdf");
-                }
-            }
-            let _ = hkcu.delete_subkey_all("Software\\Classes\\SimplePDF.Document");
-        }
-        Ok(())
+        crate::windows_integration::configure_pdf_handler()
     }
     #[cfg(not(target_os = "windows"))]
     Err("File association is only supported on Windows".into())
@@ -557,7 +574,12 @@ fn parse_uuid(id: &str) -> Result<Uuid, String> {
 }
 
 fn get_doc(uid: &Uuid, state: &State<AppState>) -> Result<Arc<pdf_core::Document>, String> {
-    state.docs.lock().get(uid).cloned().ok_or_else(|| "unknown doc id".into())
+    state
+        .docs
+        .lock()
+        .get(uid)
+        .cloned()
+        .ok_or_else(|| "unknown doc id".into())
 }
 
 async fn run_pdfium<T, F>(f: F) -> Result<T, String>
@@ -570,11 +592,7 @@ where
         .map_err(|e| format!("PDFium task failed: {e}"))?
 }
 
-async fn with_doc<T, F>(
-    id: &str,
-    state: &State<'_, AppState>,
-    f: F,
-) -> Result<T, String>
+async fn with_doc<T, F>(id: &str, state: &State<'_, AppState>, f: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(&pdf_core::Document) -> Result<T, String> + Send + 'static,

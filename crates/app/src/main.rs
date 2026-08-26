@@ -1,9 +1,14 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod commands;
 mod protocol;
 mod state;
 mod thumb;
+#[cfg(target_os = "windows")]
+mod windows_integration;
 
 use std::io::Write;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -27,8 +32,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_http::init())
         .register_uri_scheme_protocol("pdf", protocol::handle_pdf_request)
         .register_uri_scheme_protocol("thumb", thumb::handle_thumb_request)
         .setup(move |app| {
@@ -70,7 +73,7 @@ fn main() {
             commands::reveal_in_explorer,
             // file association
             commands::get_pdf_association,
-            commands::set_pdf_association,
+            commands::configure_pdf_association,
             // network
             commands::download_url_to_temp,
         ])
@@ -115,7 +118,11 @@ fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(tracing_subscriber::fmt::layer().with_writer(non_blocking).with_ansi(false))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false),
+        )
         .init();
 
     // Write panics to a separate crash.txt so users can report them.
@@ -151,36 +158,14 @@ fn webview2_present() -> bool {
     ))
     .is_ok()
         || lm
-            .open_subkey(format!(
-                "SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{guid}"
-            ))
+            .open_subkey(format!("SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{guid}"))
             .is_ok()
         || cu
-            .open_subkey(format!(
-                "Software\\Microsoft\\EdgeUpdate\\Clients\\{guid}"
-            ))
+            .open_subkey(format!("Software\\Microsoft\\EdgeUpdate\\Clients\\{guid}"))
             .is_ok()
 }
 
 #[cfg(target_os = "windows")]
 fn show_webview2_missing() {
-    // mshta is available on all Windows versions; no extra deps needed.
-    let _ = std::process::Command::new("mshta")
-        .arg(concat!(
-            "vbscript:msgbox(",
-            r#""WebView2 Runtime is required to run simple.pdf."#,
-            r#" & chr(10) & chr(10) & "Click OK to open the download page.","#,
-            "64,",
-            r#""simple.pdf — missing component""#,
-            "):close"
-        ))
-        .status();
-    let _ = std::process::Command::new("cmd")
-        .args([
-            "/c",
-            "start",
-            "",
-            "https://developer.microsoft.com/en-us/microsoft-edge/webview2/",
-        ])
-        .spawn();
+    windows_integration::show_webview2_missing();
 }

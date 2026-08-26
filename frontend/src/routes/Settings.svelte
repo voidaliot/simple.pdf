@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { theme, type ThemeChoice } from "../stores/theme.svelte";
-  import { getPdfAssociation, setPdfAssociation } from "../lib/ipc";
+  import { configurePdfAssociation, getPdfAssociation } from "../lib/ipc";
 
   const themeOptions: { value: ThemeChoice; label: string }[] = [
     { value: "system", label: "System (auto)" },
@@ -11,21 +12,40 @@
 
   let assocEnabled = $state(false);
   let assocBusy = $state(false);
+  let assocError = $state("");
 
-  onMount(async () => {
-    try { assocEnabled = await getPdfAssociation(); } catch { /**/ }
+  async function refreshAssociation() {
+    try {
+      assocEnabled = await getPdfAssociation();
+      assocError = "";
+    } catch (error) {
+      assocError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  onMount(() => {
+    let unlistenFocus: (() => void) | undefined;
+    let disposed = false;
+    void refreshAssociation();
+    void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused) void refreshAssociation();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlistenFocus = unlisten;
+    });
+    return () => {
+      disposed = true;
+      unlistenFocus?.();
+    };
   });
 
-  async function toggleAssoc(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
+  async function configureAssoc() {
     assocBusy = true;
+    assocError = "";
     try {
-      await setPdfAssociation(checked);
-      assocEnabled = checked;
-    } catch (err) {
-      console.error("Association toggle failed:", err);
-      // revert
-      assocEnabled = !checked;
+      await configurePdfAssociation();
+    } catch (error) {
+      assocError = error instanceof Error ? error.message : String(error);
     } finally {
       assocBusy = false;
     }
@@ -49,20 +69,23 @@
 
   <div class="group">
     <h2>File Associations</h2>
-    <label class="row">
+    <div class="row">
       <span>
-        Open .pdf files with simple.pdf
-        <small class="note">Sets HKCU association — no admin required.</small>
+        Default PDF app
+        <small class="note">
+          {assocEnabled
+            ? "simple.pdf is currently the Windows default."
+            : "Choose simple.pdf from Windows Default Apps. No admin access is required."}
+        </small>
       </span>
-      <input
-        type="checkbox"
-        class="toggle"
-        checked={assocEnabled}
+      <button
+        type="button"
+        class="association-button"
         disabled={assocBusy}
-        onchange={toggleAssoc}
-        aria-label="Associate .pdf files with simple.pdf"
-      />
-    </label>
+        onclick={configureAssoc}
+      >{assocBusy ? "Opening…" : assocEnabled ? "Change…" : "Choose…"}</button>
+    </div>
+    {#if assocError}<p class="association-error" role="alert">{assocError}</p>{/if}
   </div>
 
   <div class="group">
@@ -92,7 +115,13 @@
     padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius);
     background: var(--bg-elev); color: var(--fg); font: inherit; font-size: 13px; cursor: pointer;
   }
-  .toggle { width: 18px; height: 18px; cursor: pointer; flex-shrink: 0; }
-  .toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+  .association-button {
+    padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-elev); color: var(--fg); font: inherit; font-size: 13px;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .association-button:hover:not(:disabled) { border-color: var(--accent); }
+  .association-button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .association-error { margin: 8px 0 0; color: var(--danger); font-size: 12px; }
   .muted { color: var(--fg-muted); font-size: 13px; margin: 4px 0; }
 </style>

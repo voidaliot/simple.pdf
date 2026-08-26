@@ -58,7 +58,7 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 
 - [ ] **NFR-PERF-01** — Cold start to first page paint ≤ 1.5 s for a 10 MB PDF on baseline hardware (4-core CPU, SSD, Win10 22H2).
 - [ ] **NFR-PERF-02** — Scroll and zoom remain ≥ 60 fps on a 50-page text PDF at fit-width zoom on baseline hardware.
-- [ ] **NFR-SIZE-01** — Shipped portable zip is ≤ 20 MB (exe + pdfium.dll + icons).
+- [x] **NFR-SIZE-01** — Shipped portable zip is ≤ 20 MB (exe + pdfium.dll + icons).
 - [ ] **NFR-MEM-01** — Idle working set < 200 MB with one 50 MB PDF open.
 - [ ] **NFR-STAB-01** — Opening a malformed or encrypted PDF never crashes the app; user sees an explanatory toast.
 

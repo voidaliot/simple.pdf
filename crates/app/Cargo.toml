@@ -30,8 +30,6 @@ tauri-plugin-dialog = { workspace = true }
 tauri-plugin-fs = { workspace = true }
 tauri-plugin-os = { workspace = true }
 tauri-plugin-single-instance = { workspace = true }
-tauri-plugin-shell = { workspace = true }
-tauri-plugin-http = { workspace = true }
 
 reqwest = { workspace = true }
 urlencoding = { workspace = true }
@@ -42,3 +40,8 @@ pdf-core = { path = "../pdf-core" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

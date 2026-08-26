@@ -6,6 +6,11 @@
 # Usage (from repo root or scripts\):
 #   .\scripts\build-portable.ps1
 
+param(
+    [string]$CertificateThumbprint = $env:SIMPLE_PDF_CERTIFICATE_THUMBPRINT,
+    [string]$TimestampUrl = $env:SIMPLE_PDF_TIMESTAMP_URL
+)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 
@@ -15,7 +20,26 @@ Write-Host "=== simple.pdf - portable build ===" -ForegroundColor Cyan
 Push-Location (Join-Path $Root "crates\app")
 try {
     Write-Host "[1/4] Building release binary (no bundle)..."
-    node ../../frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle
+    $TauriArguments = @("build", "--no-bundle")
+    if ($CertificateThumbprint) {
+        if (-not $TimestampUrl) {
+            throw "SIMPLE_PDF_TIMESTAMP_URL is required when signing is enabled"
+        }
+        $SigningConfig = @{
+            bundle = @{
+                windows = @{
+                    certificateThumbprint = $CertificateThumbprint
+                    digestAlgorithm = "sha256"
+                    timestampUrl = $TimestampUrl
+                }
+            }
+        } | ConvertTo-Json -Compress -Depth 4
+        $TauriArguments += @("--config", $SigningConfig)
+        Write-Host "  Authenticode signing enabled" -ForegroundColor Green
+    } else {
+        Write-Warning "No trusted certificate configured; the portable executable will be unsigned"
+    }
+    node ../../frontend/node_modules/@tauri-apps/cli/tauri.js @TauriArguments
     if ($LASTEXITCODE -ne 0) { throw "Tauri build failed" }
 } finally {
     Pop-Location
