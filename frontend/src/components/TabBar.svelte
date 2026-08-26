@@ -365,7 +365,10 @@
   .tab-shell:hover .close-tab, .tab-main.active + .close-tab, .close-tab:focus-visible { opacity: .62; }
   .close-tab:hover { background: var(--control-hover); opacity: 1 !important; }
 
-  .new-tab, .settings-btn { align-self: center; margin: 0 3px; }
+  .new-tab, .settings-btn {
+    align-self: center; margin: 0 3px;
+    transform: translateY(3px);
+  }
   .window-drag { min-width: 24px; flex: 1 1 80px; }
   .window-controls { display: flex; align-items: stretch; flex: 0 0 auto; height: var(--chrome-h); margin-left: 2px; }
   .caption-button {
