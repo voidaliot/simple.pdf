@@ -1,5 +1,17 @@
-use crate::{Document, PdfError, PdfResult};
+use crate::navigation::link_target;
+use crate::{Document, LinkTarget, PdfError, PdfResult};
 use pdfium_render::prelude::*;
+use std::path::{Path, PathBuf};
+
+/// Removes an incomplete save artifact on every error path. On success the
+/// rename has already consumed the path, so the final removal is a no-op.
+struct TemporarySave(PathBuf);
+
+impl Drop for TemporarySave {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 /// Normalized annotation bounding rect ([0,1] relative to page dimensions).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -21,6 +33,9 @@ pub struct Annotation {
     pub color: [u8; 4],
     pub contents: Option<String>,
     pub author: Option<String>,
+    /// Click destination for link annotations. `None` for annotations without
+    /// a supported local-page or URI action.
+    pub link_target: Option<LinkTarget>,
 }
 
 // ── Read ───────────────────────────────────────────────────────────────────────
@@ -47,10 +62,21 @@ impl Document {
                     Err(_) => continue,
                 };
                 let kind = kind_str(annot.annotation_type());
+                // Enumerate links through PdfPage::links() below. That API
+                // exposes direct destinations and actions reliably, whereas
+                // generic annotation metadata does not for every producer.
+                if kind == "link" {
+                    continue;
+                }
                 let rect = annot
                     .bounds()
                     .map(|b| pdf_to_screen(&b, pw, ph))
-                    .unwrap_or(AnnRect { left: 0.0, top: 0.0, width: 0.05, height: 0.05 });
+                    .unwrap_or(AnnRect {
+                        left: 0.0,
+                        top: 0.0,
+                        width: 0.05,
+                        height: 0.05,
+                    });
                 // pdfium-render 0.8.37's annotation color fallback casts an
                 // annotation handle to a page-object handle when an appearance
                 // stream exists. Read the real appearance object first to avoid
@@ -82,6 +108,27 @@ impl Document {
                     color,
                     contents,
                     author,
+                    link_target: None,
+                });
+            }
+
+            for (link_index, link) in page.links().iter().enumerate() {
+                let Ok(bounds) = link.rect() else {
+                    continue;
+                };
+                let Some(link_target) = link_target(&link) else {
+                    continue;
+                };
+                result.push(Annotation {
+                    index: link_index as u32,
+                    kind: "link".into(),
+                    rect: pdf_to_screen(&bounds, pw, ph),
+                    // Link annotations are transparent hit targets; Pdfium
+                    // remains the sole renderer of their visual appearance.
+                    color: [0, 0, 0, 0],
+                    contents: None,
+                    author: None,
+                    link_target: Some(link_target),
                 });
             }
             Ok(result)
@@ -327,21 +374,36 @@ impl Document {
     }
 
     /// Atomically overwrite the original file: write to a temp file then rename.
-    pub fn save_to_path(&self, path: &std::path::Path) -> PdfResult<()> {
+    pub fn save_to_path(&self, path: &Path) -> PdfResult<()> {
+        let parent = path.parent().unwrap_or(Path::new("."));
+        let tmp_name = format!(".simplepdf_{}.tmp", uuid::Uuid::new_v4().as_simple());
+        let tmp = parent.join(&tmp_name);
+        let _cleanup = TemporarySave(tmp.clone());
+
         self.with_doc(|doc| {
-            let parent = path.parent().unwrap_or(std::path::Path::new("."));
-            let tmp_name = format!(".simplepdf_{}.tmp", uuid::Uuid::new_v4().as_simple());
-            let tmp = parent.join(&tmp_name);
             doc.save_to_file(&tmp)
-                .map_err(|e| PdfError::Render(e.to_string()))?;
-            std::fs::rename(&tmp, path).map_err(PdfError::Io)
-        })
+                .map_err(|e| PdfError::Render(e.to_string()))
+        })?;
+
+        // Pdfium has closed its output handle and released the process-wide
+        // native gate. Flush and replace outside that critical section so
+        // disk latency cannot hold up rendering in another tab.
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&tmp)?
+            .sync_all()?;
+        std::fs::rename(&tmp, path).map_err(PdfError::Io)
     }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-enum MarkupKind { Highlight, Underline, Strikeout }
+enum MarkupKind {
+    Highlight,
+    Underline,
+    Strikeout,
+}
 
 fn create_markup_annotation(
     annots: &mut PdfPageAnnotations<'_>,
@@ -416,25 +478,30 @@ fn kind_str(t: PdfPageAnnotationType) -> String {
     match t {
         PdfPageAnnotationType::Highlight => "highlight",
         PdfPageAnnotationType::Underline => "underline",
-        PdfPageAnnotationType::Squiggly  => "squiggly",
+        PdfPageAnnotationType::Squiggly => "squiggly",
         PdfPageAnnotationType::Strikeout => "strikeout",
-        PdfPageAnnotationType::Text      => "text",
-        PdfPageAnnotationType::Ink       => "ink",
-        PdfPageAnnotationType::Link      => "link",
-        PdfPageAnnotationType::Widget    => "widget",
-        PdfPageAnnotationType::Stamp     => "stamp",
-        PdfPageAnnotationType::FreeText  => "freetext",
-        _                                => "other",
+        PdfPageAnnotationType::Text => "text",
+        PdfPageAnnotationType::Ink => "ink",
+        PdfPageAnnotationType::Link => "link",
+        PdfPageAnnotationType::Widget => "widget",
+        PdfPageAnnotationType::Stamp => "stamp",
+        PdfPageAnnotationType::FreeText => "freetext",
+        _ => "other",
     }
     .to_owned()
 }
 
 fn pdf_to_screen(r: &PdfRect, pw: f32, ph: f32) -> AnnRect {
-    let left  = (r.left().value / pw).clamp(0.0, 1.0);
+    let left = (r.left().value / pw).clamp(0.0, 1.0);
     let top_s = (1.0 - r.top().value / ph).clamp(0.0, 1.0);
     let w = ((r.right().value - r.left().value) / pw).abs().max(0.001);
     let h = ((r.top().value - r.bottom().value) / ph).abs().max(0.001);
-    AnnRect { left, top: top_s, width: w.min(1.0), height: h.min(1.0) }
+    AnnRect {
+        left,
+        top: top_s,
+        width: w.min(1.0),
+        height: h.min(1.0),
+    }
 }
 
 fn screen_to_pdf(r: &AnnRect, pw: f32, ph: f32) -> PdfRect {
@@ -464,7 +531,9 @@ fn screen_to_pdf_quad_points(r: &AnnRect, pw: f32, ph: f32) -> PdfQuadPoints {
 }
 
 fn union_rects(rects: &[AnnRect]) -> Option<AnnRect> {
-    if rects.is_empty() { return None; }
+    if rects.is_empty() {
+        return None;
+    }
     let (mut l, mut t, mut r, mut b) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for rect in rects {
         l = l.min(rect.left);
@@ -472,7 +541,12 @@ fn union_rects(rects: &[AnnRect]) -> Option<AnnRect> {
         r = r.max(rect.left + rect.width);
         b = b.max(rect.top + rect.height);
     }
-    Some(AnnRect { left: l, top: t, width: r - l, height: b - t })
+    Some(AnnRect {
+        left: l,
+        top: t,
+        width: r - l,
+        height: b - t,
+    })
 }
 
 #[cfg(test)]
@@ -480,9 +554,11 @@ mod tests {
     use super::*;
     use crate::{PdfEngine, RenderRequest, PDFIUM_GATE};
 
+    static TEST_GATE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
     fn create_blank_pdf(engine: &PdfEngine, path: &std::path::Path) {
         let _pdfium_guard = PDFIUM_GATE.lock();
-        let pdfium = &engine.pdfium.as_ref().unwrap().0;
+        let pdfium = &engine.pdfium.as_ref().unwrap().pdfium;
         let mut pdf = pdfium.create_new_pdf().unwrap();
         pdf.pages_mut()
             .create_page_at_end(PdfPagePaperSize::a4())
@@ -492,6 +568,7 @@ mod tests {
 
     #[test]
     fn markup_and_ink_are_visible_and_survive_save() {
+        let _test_guard = TEST_GATE.lock();
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("annotations.pdf");
         let dll_dir =
@@ -634,5 +711,98 @@ mod tests {
             changed_bytes(&reopened_render, &blank) > 0,
             "saved annotations must still render after reopening"
         );
+    }
+
+    #[test]
+    fn resident_document_releases_source_handle_and_renders_ipc_frame() {
+        let _test_guard = TEST_GATE.lock();
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.pdf");
+        let moved = temp.path().join("moved.pdf");
+        let dll_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/pdfium");
+        let engine = PdfEngine::new(&dll_dir).unwrap();
+        create_blank_pdf(&engine, &source);
+
+        let document = engine.open(&source).unwrap();
+        // In particular on Windows, this proves Pdfium is backed by the owned
+        // resident byte buffer rather than a still-open source file handle.
+        std::fs::rename(&source, &moved).unwrap();
+
+        let frame = document
+            .render_page_ipc(RenderRequest {
+                page_index: 0,
+                scale: 0.1,
+            })
+            .unwrap();
+        let raw = document
+            .render_page_raw(RenderRequest {
+                page_index: 0,
+                scale: 0.1,
+            })
+            .unwrap();
+        assert!(frame.len() >= 8);
+        let width = u32::from_le_bytes(frame[0..4].try_into().unwrap()) as usize;
+        let height = u32::from_le_bytes(frame[4..8].try_into().unwrap()) as usize;
+        assert!(width > 0 && height > 0);
+        assert_eq!(frame.len(), 8 + width * height * 4);
+        assert_eq!((raw.width as usize, raw.height as usize), (width, height));
+        assert_eq!(&frame[8..], raw.rgba.as_slice());
+        assert!(frame[8..].chunks_exact(4).all(|pixel| pixel[3] == 255));
+    }
+
+    #[test]
+    fn failed_atomic_save_removes_its_temporary_file() {
+        let _test_guard = TEST_GATE.lock();
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.pdf");
+        let destination_directory = temp.path().join("destination");
+        std::fs::create_dir(&destination_directory).unwrap();
+        let dll_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/pdfium");
+        let engine = PdfEngine::new(&dll_dir).unwrap();
+        create_blank_pdf(&engine, &source);
+        let document = engine.open(&source).unwrap();
+
+        assert!(document.save_to_path(&destination_directory).is_err());
+        let leftovers = std::fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".simplepdf_")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn repeated_open_render_search_close_releases_resident_budgets() {
+        let _test_guard = TEST_GATE.lock();
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("soak.pdf");
+        let dll_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/pdfium");
+        let engine = PdfEngine::new(&dll_dir).unwrap();
+        create_blank_pdf(&engine, &source);
+        let shared = engine.pdfium.as_ref().unwrap();
+
+        for _ in 0..100 {
+            let document = engine.open(&source).unwrap();
+            document
+                .render_page_ipc(RenderRequest {
+                    page_index: 0,
+                    scale: 0.05,
+                })
+                .unwrap();
+            document.page_text_spans(0).unwrap();
+            assert!(shared.source_bytes_budget.used() > 0);
+            assert!(shared.text_cache_budget.used() > 0);
+            drop(document);
+            assert_eq!(shared.source_bytes_budget.used(), 0);
+            assert_eq!(shared.text_cache_budget.used(), 0);
+        }
     }
 }

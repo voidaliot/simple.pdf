@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use pdf_core::{AnnRect, Annotation, FormField, PageSize, TextSpan};
+use pdf_core::{AnnRect, Annotation, FormField, OutlineItem, PageSize, SearchResults, TextSpan};
 use serde::Serialize;
 use shared_types::AppVersion;
 use std::path::PathBuf;
@@ -33,10 +33,26 @@ pub async fn open_document(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<OpenedDocument, String> {
-    let p = PathBuf::from(&path);
+    let p = PathBuf::from(path);
+    let requested_path = p.clone();
     let engine = state.engine.clone();
-    let open_path = p.clone();
-    let doc = run_pdfium(move || engine.open(&open_path).map_err(|e| e.to_string())).await?;
+    let opened = run_pdfium(move || {
+        let canonical = std::fs::canonicalize(&p).map_err(|e| e.to_string())?;
+        let result = engine.open(&canonical).map_err(|e| e.to_string());
+        Ok((canonical, result))
+    })
+    .await;
+    let (p, doc) = match opened {
+        Ok((canonical, Ok(doc))) => (canonical, doc),
+        Ok((canonical, Err(error))) => {
+            state.remove_temporary_download(&canonical);
+            return Err(error);
+        }
+        Err(error) => {
+            state.remove_temporary_download(&requested_path);
+            return Err(error);
+        }
+    };
     let id = Uuid::new_v4();
     let page_count = doc.page_count;
     let title = p
@@ -44,10 +60,12 @@ pub async fn open_document(
         .and_then(|s| s.to_str())
         .unwrap_or("untitled")
         .to_string();
-    state.docs.lock().insert(id, Arc::new(doc));
+    let doc = Arc::new(doc);
+    state.docs.lock().insert(id, Arc::clone(&doc));
+    state.text_indexer.enqueue(Arc::downgrade(&doc), page_count);
     Ok(OpenedDocument {
         id: id.to_string(),
-        path,
+        path: user_display_path(&p),
         title,
         page_count,
     })
@@ -59,11 +77,17 @@ pub async fn close_document(id: String, state: State<'_, AppState>) -> Result<()
     let doc = state.docs.lock().remove(&uid);
     state.undo_stacks.lock().remove(&uid);
     if let Some(doc) = doc {
-        run_pdfium(move || {
+        let temporary_download = state.take_temporary_download(&doc.path);
+        doc.cancel_background_work();
+        let result = run_pdfium(move || {
             drop(doc);
             Ok(())
         })
-        .await?;
+        .await;
+        if let Some(path) = temporary_download {
+            let _ = std::fs::remove_file(path);
+        }
+        result?;
     }
     Ok(())
 }
@@ -102,21 +126,9 @@ pub async fn render_page_pixels(
     // full-frame response copy both stay off the async/UI executor.
     let uid = parse_uuid(&id)?;
     let doc = get_doc(&uid, &state)?;
-    let buf = run_pdfium(move || -> Result<Vec<u8>, String> {
-        let raw = doc
-            .render_page_raw(pdf_core::RenderRequest { page_index, scale })
-            .map_err(|e| e.to_string())?;
-
-        let response_len = raw
-            .rgba
-            .len()
-            .checked_add(8)
-            .ok_or_else(|| "render response size overflow".to_string())?;
-        let mut buf = Vec::with_capacity(response_len);
-        buf.extend_from_slice(&raw.width.to_le_bytes());
-        buf.extend_from_slice(&raw.height.to_le_bytes());
-        buf.extend_from_slice(&raw.rgba);
-        Ok(buf)
+    let buf = run_pdfium(move || {
+        doc.render_page_ipc(pdf_core::RenderRequest { page_index, scale })
+            .map_err(|e| e.to_string())
     })
     .await?;
 
@@ -127,17 +139,15 @@ pub async fn render_page_pixels(
 /// Thumbnails are small enough that JPEG+base64 is fine here.
 #[tauri::command]
 pub async fn render_thumb_b64(
-    path: String,
+    id: String,
     max_w: f32,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     use base64::Engine;
-    let engine = state.engine.clone();
-    let p = PathBuf::from(path);
+    let uid = parse_uuid(&id)?;
+    let doc = get_doc(&uid, &state)?;
     run_pdfium(move || {
-        let doc = engine.open(&p).map_err(|e| e.to_string())?;
-        let sizes = doc.page_sizes().map_err(|e| e.to_string())?;
-        let page_w = sizes.first().map(|s| s.width).unwrap_or(612.0);
+        let page_w = doc.page_size(0).map(|size| size.width).unwrap_or(612.0);
         let scale = (max_w / page_w).clamp(0.05, 1.0);
         let bytes = doc
             .render_page_jpeg(pdf_core::RenderRequest {
@@ -157,10 +167,14 @@ pub async fn get_page_sizes(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<PageSize>, String> {
-    with_doc(&id, &state, |doc| {
-        doc.page_sizes().map_err(|e| e.to_string())
-    })
-    .await
+    let uid = parse_uuid(&id)?;
+    let doc = get_doc(&uid, &state)?;
+    // Viewer mount is also the active-tab signal. Resume low-priority text
+    // warming for this document so Find is hot after switching older tabs.
+    state
+        .text_indexer
+        .enqueue(Arc::downgrade(&doc), doc.page_count);
+    run_pdfium(move || doc.page_sizes().map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
@@ -171,6 +185,55 @@ pub async fn get_page_text_spans(
 ) -> Result<Vec<TextSpan>, String> {
     with_doc(&id, &state, move |doc| {
         doc.page_text_spans(page_index).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+const DEFAULT_SEARCH_RESULTS: usize = 10_000;
+const MAX_SEARCH_RESULTS: usize = 10_000;
+const MAX_SEARCH_QUERY_CHARS: usize = 1_024;
+
+#[tauri::command]
+pub async fn search_document(
+    id: String,
+    query: String,
+    max_results: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<SearchResults, String> {
+    if query.chars().count() > MAX_SEARCH_QUERY_CHARS {
+        return Err(format!(
+            "search query exceeds the {MAX_SEARCH_QUERY_CHARS} character limit"
+        ));
+    }
+    let uid = parse_uuid(&id)?;
+    let doc = get_doc(&uid, &state)?;
+    // Bump synchronously, before entering the blocking pool, so a freshly
+    // debounced query cancels stale extraction immediately.
+    let generation = doc.begin_search();
+    let max_results = max_results
+        .unwrap_or(DEFAULT_SEARCH_RESULTS)
+        .clamp(1, MAX_SEARCH_RESULTS);
+    run_pdfium(move || {
+        doc.search_document(&query, max_results, generation)
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn cancel_search(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let uid = parse_uuid(&id)?;
+    get_doc(&uid, &state)?.cancel_search();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_document_outline(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<OutlineItem>, String> {
+    with_doc(&id, &state, |doc| {
+        doc.document_outline().map_err(|e| e.to_string())
     })
     .await
 }
@@ -496,10 +559,56 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn open_external_uri(uri: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&uri).map_err(|_| "PDF link is not a valid URI")?;
+    if !matches!(parsed.scheme(), "http" | "https" | "mailto") {
+        return Err("Only HTTP, HTTPS, and mail links can be opened".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        crate::windows_integration::open_uri(parsed.as_str())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = parsed;
+        Err("Opening external PDF links is only supported on Windows".into())
+    }
+}
+
 // ── URL download ──────────────────────────────────────────────────────────────
 
+struct TemporaryDownloadGuard {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl TemporaryDownloadGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, keep: false }
+    }
+
+    fn persist(mut self) {
+        self.keep = true;
+    }
+}
+
+impl Drop for TemporaryDownloadGuard {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 #[tauri::command]
-pub async fn download_url_to_temp(url: String) -> Result<String, String> {
+pub async fn download_url_to_temp(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use tokio::io::AsyncWriteExt;
+
     const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
 
     let parsed = reqwest::Url::parse(&url).map_err(|_| "Enter a valid HTTP or HTTPS URL")?;
@@ -528,21 +637,49 @@ pub async fn download_url_to_temp(url: String) -> Result<String, String> {
         return Err("PDF download exceeds the 100 MB limit".into());
     }
 
-    let mut bytes = Vec::new();
+    let tmp = std::env::temp_dir().join(format!("simplepdf_{}.pdf", Uuid::new_v4().as_simple()));
+    let guard = TemporaryDownloadGuard::new(tmp.clone());
+    let mut file = tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&tmp)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut total = 0usize;
+    let mut header = [0u8; 5];
+    let mut header_len = 0usize;
+
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        if bytes.len().saturating_add(chunk.len()) > MAX_DOWNLOAD_BYTES {
-            return Err("PDF download exceeds the 100 MB limit".into());
+        total = total
+            .checked_add(chunk.len())
+            .filter(|total| *total <= MAX_DOWNLOAD_BYTES)
+            .ok_or_else(|| "PDF download exceeds the 100 MB limit".to_string())?;
+
+        if header_len < header.len() {
+            let copy_len = (header.len() - header_len).min(chunk.len());
+            header[header_len..header_len + copy_len].copy_from_slice(&chunk[..copy_len]);
+            header_len += copy_len;
+            if header_len == header.len() && &header != b"%PDF-" {
+                return Err("URL did not return a valid PDF".into());
+            }
         }
-        bytes.extend_from_slice(&chunk);
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
     }
 
-    if bytes.len() < 5 || &bytes[0..5] != b"%PDF-" {
+    if header_len < header.len() {
         return Err("URL did not return a valid PDF".into());
     }
 
-    let tmp = std::env::temp_dir().join(format!("simplepdf_{}.pdf", Uuid::new_v4().as_simple()));
-    std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
-    Ok(tmp.to_string_lossy().into_owned())
+    file.flush().await.map_err(|e| e.to_string())?;
+    file.sync_all().await.map_err(|e| e.to_string())?;
+    drop(file);
+
+    let canonical = tokio::fs::canonicalize(&tmp)
+        .await
+        .map_err(|e| e.to_string())?;
+    state.register_temporary_download(canonical.clone());
+    guard.persist();
+    Ok(canonical.to_string_lossy().into_owned())
 }
 
 // ── File association (Windows HKCU) ──────────────────────────────────────────
@@ -580,6 +717,23 @@ fn get_doc(uid: &Uuid, state: &State<AppState>) -> Result<Arc<pdf_core::Document
         .get(uid)
         .cloned()
         .ok_or_else(|| "unknown doc id".into())
+}
+
+fn user_display_path(path: &std::path::Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(target_os = "windows")]
+    {
+        // std::fs::canonicalize() returns verbatim paths on Windows. Remove
+        // that implementation prefix for display/copy while retaining the
+        // canonical path inside Document for saving.
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = path.strip_prefix(r"\\?\") {
+            return rest.into();
+        }
+    }
+    path.into_owned()
 }
 
 async fn run_pdfium<T, F>(f: F) -> Result<T, String>

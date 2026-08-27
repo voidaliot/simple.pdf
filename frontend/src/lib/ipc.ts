@@ -46,6 +46,27 @@ export interface Annotation {
   color: [number, number, number, number];
   contents: string | null;
   author: string | null;
+  link_target: LinkTarget | null;
+}
+
+export type LinkTarget =
+  | { kind: "page"; page_index: number }
+  | { kind: "uri"; uri: string };
+
+export interface OutlineItem {
+  title: string;
+  page_index: number | null;
+  depth: number;
+}
+
+export interface SearchMatch {
+  page_index: number;
+  rects: AnnRect[];
+}
+
+export interface SearchResult {
+  matches: SearchMatch[];
+  truncated: boolean;
 }
 
 // ── Document lifecycle ─────────────────────────────────────────────────────────
@@ -74,6 +95,22 @@ export async function getPageSizes(id: string): Promise<PageSize[]> {
 
 export async function getPageTextSpans(id: string, pageIndex: number): Promise<TextSpan[]> {
   return invoke<TextSpan[]>("get_page_text_spans", { id, pageIndex });
+}
+
+export async function getDocumentOutline(id: string): Promise<OutlineItem[]> {
+  return invoke<OutlineItem[]>("get_document_outline", { id });
+}
+
+export async function searchDocument(
+  id: string,
+  query: string,
+  maxResults?: number,
+): Promise<SearchResult> {
+  return invoke<SearchResult>("search_document", { id, query, maxResults });
+}
+
+export async function cancelSearch(id: string): Promise<void> {
+  return invoke("cancel_search", { id });
 }
 
 /**
@@ -144,11 +181,11 @@ function normalizeBinaryResponse(payload: unknown): Uint8Array<ArrayBuffer> {
 }
 
 /**
- * Render page 0 of an on-disk PDF at thumbnail size, returned as a data URL.
- * Uses IPC instead of the thumb:// custom scheme.
+ * Render page 0 of an already-open PDF at thumbnail size. Reusing the resident
+ * document avoids opening and parsing the same file a second time.
  */
-export async function renderThumbB64(filePath: string, maxW = 240): Promise<string> {
-  const b64 = await invoke<string>("render_thumb_b64", { path: filePath, maxW });
+export async function renderThumbB64(docId: string, maxW = 240): Promise<string> {
+  const b64 = await invoke<string>("render_thumb_b64", { id: docId, maxW });
   return `data:image/jpeg;base64,${b64}`;
 }
 
@@ -282,6 +319,10 @@ export async function listFolderPdfs(path: string): Promise<string[]> {
 
 export async function revealInExplorer(path: string): Promise<void> {
   return invoke("reveal_in_explorer", { path });
+}
+
+export async function openExternalUri(uri: string): Promise<void> {
+  return invoke("open_external_uri", { uri });
 }
 
 // ── File association ──────────────────────────────────────────────────────────

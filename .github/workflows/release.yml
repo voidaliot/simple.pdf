@@ -1,0 +1,278 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Windows release
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Validate tag and versions
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+)$') {
+            throw "Release tag must use vMAJOR.MINOR.PATCH; received '$tag'"
+          }
+
+          $version = $Matches.version
+          $cargoManifest = Get-Content Cargo.toml -Raw
+          $cargoMatch = [regex]::Match(
+            $cargoManifest,
+            '(?ms)^\[workspace\.package\].*?^version\s*=\s*"(?<version>[^"]+)"'
+          )
+          if (-not $cargoMatch.Success) {
+            throw 'Could not read workspace.package.version from Cargo.toml'
+          }
+
+          $versions = [ordered]@{
+            tag = $version
+            cargo = $cargoMatch.Groups['version'].Value
+            tauri = (Get-Content crates/app/tauri.conf.json -Raw | ConvertFrom-Json).version
+            frontend = (Get-Content frontend/package.json -Raw | ConvertFrom-Json).version
+          }
+
+          $mismatches = $versions.GetEnumerator() | Where-Object Value -ne $version
+          if ($mismatches) {
+            $details = ($versions.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '
+            throw "Release versions do not match: $details"
+          }
+
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Validated release version $version" | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.2 --activate
+          pnpm --version
+
+      - name: Cache Rust build data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: windows-release-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            windows-release-cargo-
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Install NSIS
+        run: choco install nsis --yes --no-progress
+
+      - name: Fetch PDFium
+        run: ./scripts/fetch-pdfium.ps1
+
+      - name: Run frontend checks
+        run: pnpm --dir frontend check
+
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Import optional signing certificate
+        env:
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $provided = @(
+            $env:WINDOWS_CERTIFICATE_BASE64,
+            $env:WINDOWS_CERTIFICATE_PASSWORD,
+            $env:WINDOWS_TIMESTAMP_URL
+          ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+          if ($provided.Count -eq 0) {
+            "SIGNED_BUILD=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "::warning::No signing certificate is configured; release binaries will be unsigned."
+            return
+          }
+
+          if ($provided.Count -ne 3) {
+            throw 'Configure all three signing secrets or none of them: WINDOWS_CERTIFICATE_BASE64, WINDOWS_CERTIFICATE_PASSWORD, and WINDOWS_TIMESTAMP_URL'
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'simple-pdf-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes(
+              $certificatePath,
+              [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64)
+            )
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $imported = Import-PfxCertificate `
+              -FilePath $certificatePath `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $password `
+              -Exportable
+            $certificate = $imported | Where-Object HasPrivateKey | Select-Object -First 1
+            if (-not $certificate) {
+              throw 'The PFX did not contain a certificate with a private key'
+            }
+
+            "SIMPLE_PDF_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" |
+              Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "SIMPLE_PDF_TIMESTAMP_URL=$env:WINDOWS_TIMESTAMP_URL" |
+              Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "SIGNED_BUILD=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } finally {
+            Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Build portable package
+        run: ./scripts/build-portable.ps1
+
+      - name: Build NSIS installer
+        run: ./scripts/build-installer.ps1
+
+      - name: Verify and prepare release assets
+        run: |
+          $portableExe = Resolve-Path 'dist/portable/simple.pdf.exe'
+          $portableSource = Resolve-Path 'dist/simple.pdf-portable.zip'
+          $portableAsset = "dist/simple.pdf_${env:RELEASE_VERSION}_x64-portable.zip"
+          $installer = Resolve-Path "target/x86_64-pc-windows-msvc/release/bundle/nsis/simple.pdf_${env:RELEASE_VERSION}_x64-setup.exe"
+
+          Copy-Item -LiteralPath $portableSource -Destination $portableAsset -Force
+
+          $fileVersion = (Get-Item $portableExe).VersionInfo.ProductVersion
+          if ($fileVersion -ne $env:RELEASE_VERSION) {
+            throw "Executable version is $fileVersion, expected $env:RELEASE_VERSION"
+          }
+
+          $signatureTargets = @($portableExe, $installer)
+          foreach ($target in $signatureTargets) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $target
+            if ($env:SIGNED_BUILD -eq 'true' -and $signature.Status -ne 'Valid') {
+              throw "Expected a valid Authenticode signature on $target; status was $($signature.Status)"
+            }
+            if ($env:SIGNED_BUILD -ne 'true' -and $signature.Status -ne 'NotSigned') {
+              throw "Expected an unsigned artifact at $target; status was $($signature.Status)"
+            }
+          }
+
+          $portableHash = (Get-FileHash $portableAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installerHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          "PORTABLE_ASSET=$portableAsset" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALLER_ASSET=$installer" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PORTABLE_HASH=$portableHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALLER_HASH=$installerHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          @"
+          | Asset | Size | SHA-256 |
+          | --- | ---: | --- |
+          | $(Split-Path $portableAsset -Leaf) | $([math]::Round((Get-Item $portableAsset).Length / 1MB, 2)) MB | ``$portableHash`` |
+          | $(Split-Path $installer -Leaf) | $([math]::Round((Get-Item $installer).Length / 1MB, 2)) MB | ``$installerHash`` |
+          "@ | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Create release notes
+        run: |
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $escapedVersion = [regex]::Escape($env:RELEASE_VERSION)
+          $pattern = "(?ms)^##\s+$escapedVersion(?:\s+[^\r\n]*)?\r?\n\r?\n(?<body>.*?)(?=^##\s+|\z)"
+          $match = [regex]::Match($changelog, $pattern)
+          if (-not $match.Success) {
+            throw "CHANGELOG.md has no section for $env:RELEASE_VERSION"
+          }
+
+          $portableName = Split-Path $env:PORTABLE_ASSET -Leaf
+          $installerName = Split-Path $env:INSTALLER_ASSET -Leaf
+          $signatureNotice = if ($env:SIGNED_BUILD -eq 'true') {
+            "> [!NOTE]`n> The Windows binaries are Authenticode-signed and timestamped."
+          } else {
+            "> [!WARNING]`n> These binaries are not Authenticode-signed. Windows may display a SmartScreen warning."
+          }
+
+          $notes = @"
+          ## What's changed
+
+          $($match.Groups['body'].Value.Trim())
+
+          ## Downloads
+
+          - $installerName — Windows x64 installer
+          - $portableName — Windows x64 portable package
+
+          $signatureNotice
+
+          ## SHA-256
+
+          - ${installerName}: $env:INSTALLER_HASH
+          - ${portableName}: $env:PORTABLE_HASH
+          "@
+
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $notes.Trim() | Set-Content -LiteralPath $notesPath -Encoding utf8
+          "RELEASE_NOTES=$notesPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $repository = "${{ github.repository }}"
+          $existingDraft = gh release view $tag --repo $repository --json isDraft --jq '.isDraft' 2>$null
+
+          if ($LASTEXITCODE -eq 0) {
+            if ($existingDraft.Trim() -ne 'true') {
+              throw "Release $tag is already public; refusing to overwrite published assets"
+            }
+            gh release upload $tag $env:INSTALLER_ASSET $env:PORTABLE_ASSET --clobber --repo $repository
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the release assets' }
+          } else {
+            gh release create $tag `
+              $env:INSTALLER_ASSET `
+              $env:PORTABLE_ASSET `
+              --repo $repository `
+              --verify-tag `
+              --draft `
+              --title "simple.pdf $env:RELEASE_VERSION" `
+              --notes-file $env:RELEASE_NOTES
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create the draft release' }
+          }
+
+          gh release edit $tag `
+            --repo $repository `
+            --title "simple.pdf $env:RELEASE_VERSION" `
+            --notes-file $env:RELEASE_NOTES `
+            --draft=false `
+            --prerelease=false `
+            --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the release' }
+
+      - name: Remove imported signing certificate
+        if: always() && env.SIMPLE_PDF_CERTIFICATE_THUMBPRINT != ''
+        run: |
+          $certificatePath = "Cert:\CurrentUser\My\$env:SIMPLE_PDF_CERTIFICATE_THUMBPRINT"
+          if (Test-Path -LiteralPath $certificatePath) {
+            Remove-Item -LiteralPath $certificatePath -Force
+          }

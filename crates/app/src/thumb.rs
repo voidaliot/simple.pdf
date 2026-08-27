@@ -35,14 +35,12 @@ fn render<R: Runtime>(
     let uri = request.uri();
     let query = uri.query().unwrap_or("");
 
-    let path_encoded = query
+    let doc_id = query
         .split('&')
-        .find(|p| p.starts_with("path="))
-        .and_then(|p| p.strip_prefix("path="))
-        .ok_or("missing path param")?;
-
-    let path_str = urlencoding::decode(path_encoded).map_err(|e| e.to_string())?;
-    let path = std::path::Path::new(path_str.as_ref());
+        .find(|p| p.starts_with("id="))
+        .and_then(|p| p.strip_prefix("id="))
+        .ok_or("missing document id")?;
+    let doc_id = uuid::Uuid::parse_str(doc_id).map_err(|e| e.to_string())?;
 
     let max_w: f32 = query
         .split('&')
@@ -51,9 +49,13 @@ fn render<R: Runtime>(
         .unwrap_or(240.0);
 
     let state = app.state::<AppState>();
-    let doc = state.engine.open(path).map_err(|e| e.to_string())?;
-    let sizes = doc.page_sizes().map_err(|e| e.to_string())?;
-    let page_w = sizes.first().map(|s| s.width).unwrap_or(612.0);
+    let doc = state
+        .docs
+        .lock()
+        .get(&doc_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown doc {doc_id}"))?;
+    let page_w = doc.page_size(0).map(|size| size.width).unwrap_or(612.0);
     let scale = (max_w / page_w).clamp(0.05, 1.0);
     doc.render_page_jpeg(RenderRequest { page_index: 0, scale })
         .map_err(|e| e.to_string())

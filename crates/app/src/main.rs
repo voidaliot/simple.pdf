@@ -4,9 +4,7 @@
 )]
 
 mod commands;
-mod protocol;
 mod state;
-mod thumb;
 #[cfg(target_os = "windows")]
 mod windows_integration;
 
@@ -32,8 +30,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
-        .register_uri_scheme_protocol("pdf", protocol::handle_pdf_request)
-        .register_uri_scheme_protocol("thumb", thumb::handle_thumb_request)
         .setup(move |app| {
             state::init(app, initial_args.clone())?;
             Ok(())
@@ -51,6 +47,9 @@ fn main() {
             // page data
             commands::get_page_sizes,
             commands::get_page_text_spans,
+            commands::search_document,
+            commands::cancel_search,
+            commands::get_document_outline,
             // forms
             commands::get_form_type,
             commands::get_form_fields,
@@ -71,6 +70,7 @@ fn main() {
             // file system
             commands::list_folder_pdfs,
             commands::reveal_in_explorer,
+            commands::open_external_uri,
             // file association
             commands::get_pdf_association,
             commands::configure_pdf_association,

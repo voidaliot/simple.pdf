@@ -2638,7 +2638,7 @@ dependencies = [
 
 [[package]]
 name = "pdf-core"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "image",
@@ -3845,7 +3845,7 @@ dependencies = [
 
 [[package]]
 name = "shared-types"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "serde",
  "ts-rs",
@@ -3876,7 +3876,7 @@ checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
 name = "simple-pdf-app"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3897,7 +3897,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "urlencoding",
  "uuid",
  "windows-sys 0.61.2",
  "winreg 0.52.0",
@@ -5082,12 +5081,6 @@ dependencies = [
  "serde",
  "serde_derive",
 ]
-
-[[package]]
-name = "urlencoding"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "urlpattern"

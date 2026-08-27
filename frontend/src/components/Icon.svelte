@@ -21,6 +21,7 @@
     | "note"
     | "ink"
     | "comments"
+    | "outline"
     | "signature"
     | "save";
 
@@ -101,6 +102,9 @@
   {:else if name === "comments"}
     <path d="M4 4.5h16v12H9l-5 4z" />
     <path d="M8 9h8M8 12h5" />
+  {:else if name === "outline"}
+    <path d="M9 6h11M9 12h11M9 18h11" />
+    <path d="M4 6h.01M4 12h.01M4 18h.01" stroke-width="3" />
   {:else if name === "signature"}
     <path d="M3 17c3.2-6.8 5.5-10.2 7-10.2 2.4 0-1.2 9.2.8 9.2 1.3 0 2.2-3 3.4-3 1 0 .8 3 2 3 1.1 0 1.7-1.8 2.7-1.8.7 0 1.1.7 1.1 1.6" />
     <path d="M3 21h18" />

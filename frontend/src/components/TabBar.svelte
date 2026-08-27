@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { isTauri } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { tabs } from "../stores/tabs.svelte";
+  import { tabs, type Tab } from "../stores/tabs.svelte";
   import Icon from "./Icon.svelte";
 
   const appWindow = isTauri() ? getCurrentWindow() : null;
@@ -13,6 +13,10 @@
   let tabMenuOpen = $state(false);
   let tablistEl: HTMLDivElement | undefined = $state();
   let tabMenuEl: HTMLDivElement | undefined = $state();
+  let tabContextMenu = $state<{ x: number; y: number; tab: Tab } | null>(null);
+  let tabContextMenuEl: HTMLDivElement | undefined = $state();
+  let tabContextMenuButton: HTMLButtonElement | undefined = $state();
+  let clipboardAnnouncement = $state("");
 
   $effect(() => {
     const activeId = tabs.activeId;
@@ -63,7 +67,14 @@
     });
   }
 
-  function onTabKeyDown(e: KeyboardEvent, index: number) {
+  function onTabKeyDown(e: KeyboardEvent, index: number, tab: Tab) {
+    if ((e.shiftKey && e.key === "F10") || e.key === "ContextMenu") {
+      if (!tab.path) return;
+      e.preventDefault();
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      openTabContextMenu(rect.left + 12, rect.bottom - 2, tab);
+      return;
+    }
     let target: number | undefined;
     if (e.key === "ArrowRight") target = index + 1;
     else if (e.key === "ArrowLeft") target = index - 1;
@@ -94,6 +105,7 @@
   function onDragStart(e: DragEvent, idx: number) {
     dragFrom = idx;
     tabMenuOpen = false;
+    tabContextMenu = null;
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", tabs.list[idx]?.id ?? "");
@@ -126,10 +138,53 @@
 
   function onWindowPointerDown(e: PointerEvent) {
     if (tabMenuOpen && !tabMenuEl?.contains(e.target as Node)) tabMenuOpen = false;
+    if (tabContextMenu && !tabContextMenuEl?.contains(e.target as Node)) tabContextMenu = null;
   }
 
   function onWindowKeyDown(e: KeyboardEvent) {
-    if (e.key === "Escape") tabMenuOpen = false;
+    if (e.key === "Escape") {
+      tabMenuOpen = false;
+      closeTabContextMenu(true);
+    }
+  }
+
+  function openTabContextMenu(x: number, y: number, tab: Tab) {
+    if (!tab.path) return;
+    tabMenuOpen = false;
+    tabContextMenu = {
+      x: Math.max(4, Math.min(x, window.innerWidth - 196)),
+      y: Math.max(4, Math.min(y, window.innerHeight - 52)),
+      tab,
+    };
+    requestAnimationFrame(() => tabContextMenuButton?.focus());
+  }
+
+  function closeTabContextMenu(restoreTabFocus = false) {
+    const tabId = tabContextMenu?.tab.id;
+    tabContextMenu = null;
+    if (restoreTabFocus && tabId) {
+      requestAnimationFrame(() => document.getElementById(`tab-${tabId}`)?.focus());
+    }
+  }
+
+  function onTabContextMenu(e: MouseEvent, tab: Tab) {
+    if (!tab.path) return;
+    e.preventDefault();
+    openTabContextMenu(e.clientX, e.clientY, tab);
+  }
+
+  async function copyTabPath() {
+    const path = tabContextMenu?.tab.path;
+    if (!path) return;
+    try {
+      await navigator.clipboard.writeText(path);
+      clipboardAnnouncement = "Path copied";
+    } catch (error) {
+      console.error("failed to copy document path", error);
+      clipboardAnnouncement = "Could not copy path";
+    } finally {
+      closeTabContextMenu(true);
+    }
   }
 
   async function minimizeWindow() {
@@ -210,6 +265,7 @@
         ondragover={(e) => onDragOver(e, i)}
         ondrop={(e) => onDrop(e, i)}
         ondragend={onDragEnd}
+        oncontextmenu={(e) => onTabContextMenu(e, tab)}
       >
         <button
           class="tab-main"
@@ -222,7 +278,7 @@
           title={tab.path ?? tab.title}
           onclick={() => tabs.activate(tab.id)}
           onmousedown={(e) => onMouseDown(e, tab.id)}
-          onkeydown={(e) => onTabKeyDown(e, i)}
+          onkeydown={(e) => onTabKeyDown(e, i, tab)}
         >
           <span class="tab-icon" aria-hidden="true">
             <Icon name={tab.kind === "home" ? "home" : tab.kind === "settings" ? "settings" : "file"} size={15} />
@@ -267,6 +323,20 @@
       <Icon name="close" size={15} strokeWidth={1.55} />
     </button>
   </div>
+
+  {#if tabContextMenu}
+    <div
+      class="tab-context-menu"
+      bind:this={tabContextMenuEl}
+      style:left="{tabContextMenu.x}px"
+      style:top="{tabContextMenu.y}px"
+      role="menu"
+      aria-label="Tab actions for {tabContextMenu.tab.title}"
+    >
+      <button bind:this={tabContextMenuButton} role="menuitem" onclick={copyTabPath}>Copy path</button>
+    </div>
+  {/if}
+  <span class="sr-only" aria-live="polite">{clipboardAnnouncement}</span>
 </header>
 
 <style>
@@ -311,6 +381,23 @@
   .menu-icon { display: inline-flex; flex: 0 0 auto; }
   .menu-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .active-dot { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--accent); }
+
+  .tab-context-menu {
+    position: fixed; z-index: 400; min-width: 188px; padding: 4px;
+    border: 1px solid var(--border); border-radius: 9px;
+    background: var(--bg-elev); box-shadow: var(--shadow-lg);
+  }
+  .tab-context-menu button {
+    display: block; width: 100%; padding: 7px 10px;
+    border: 0; border-radius: 6px; background: transparent;
+    color: var(--fg); cursor: pointer; font: inherit; font-size: 12px; text-align: left;
+  }
+  .tab-context-menu button:hover,
+  .tab-context-menu button:focus-visible { background: var(--control-hover); }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
 
   .tabs {
     display: flex; align-items: flex-end; flex: 0 1 auto;

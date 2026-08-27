@@ -1,6 +1,7 @@
 use crate::{Document, PdfError, PdfResult};
 use image::DynamicImage;
 use pdfium_render::prelude::*;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PageSize {
@@ -26,9 +27,10 @@ pub struct RawPage {
 /// practical canvas limits of the WebView receiving the pixels.
 const MAX_RENDER_DIMENSION: i32 = 16_384;
 
-/// Maximum pixels in one rendered page (128 MiB for one four-channel bitmap).
-/// The complete render/IPC pipeline temporarily holds more than one copy.
-const MAX_RENDER_PIXELS: u64 = 32 * 1024 * 1024;
+/// Maximum pixels in one rendered page (24 MiB for one four-channel bitmap),
+/// aligned with the frontend admission ceiling to bound Windows commit spikes
+/// even for direct IPC callers.
+const MAX_RENDER_PIXELS: u64 = 6_000_000;
 
 /// Validates a requested scale and converts page points to bounded pixel
 /// dimensions without casting NaN/infinity to an arbitrary integer.
@@ -76,12 +78,12 @@ fn checked_render_dimensions(page_w: f32, page_h: f32, scale: f32) -> PdfResult<
     Ok((px_w, px_h))
 }
 
-/// Convert a stride-padded opaque BGRx buffer to packed RGBA.
+/// Convert a stride-padded opaque BGRx buffer to packed RGB for JPEG encoding.
 ///
 /// `raw` has length `stride * height`; only the first `width * 4` bytes
 /// of each row are real pixels — the rest is alignment padding that must
 /// be skipped.
-fn bgrx_stride_to_rgba(
+fn bgrx_stride_to_rgb(
     raw: &[u8],
     width: usize,
     height: usize,
@@ -93,9 +95,10 @@ fn bgrx_stride_to_rgba(
     let expected_raw_len = stride
         .checked_mul(height)
         .ok_or_else(|| PdfError::Render("bitmap buffer size overflow".into()))?;
-    let output_len = row_bytes_len
+    let output_len = width
         .checked_mul(height)
-        .ok_or_else(|| PdfError::Render("RGBA output size overflow".into()))?;
+        .and_then(|pixels| pixels.checked_mul(3))
+        .ok_or_else(|| PdfError::Render("RGB output size overflow".into()))?;
 
     if stride < row_bytes_len || raw.len() != expected_raw_len {
         return Err(PdfError::Render(format!(
@@ -104,33 +107,88 @@ fn bgrx_stride_to_rgba(
         )));
     }
 
-    let mut rgba = Vec::with_capacity(output_len);
+    let mut rgb = Vec::new();
+    rgb.try_reserve_exact(output_len)
+        .map_err(|_| PdfError::Render("unable to allocate JPEG RGB buffer".into()))?;
     for row in 0..height {
         let row_bytes = &raw[row * stride..row * stride + row_bytes_len];
         for chunk in row_bytes.chunks_exact(4) {
-            // PDFium BGRx → web RGBA: swap B/R and do not interpret the
-            // undefined x byte as alpha. The page is explicitly rendered
-            // against opaque white, so output alpha is always 255.
-            rgba.extend_from_slice(&[chunk[2], chunk[1], chunk[0], 255]);
+            rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
         }
     }
-    Ok(rgba)
+    Ok(rgb)
+}
+
+/// Normalize a tightly-packed BGRx bitmap to RGBA without allocating a second
+/// full-page buffer. BGRx pixels are four-byte aligned, so their stride is
+/// exactly `width * 4` even for odd page widths.
+fn bgrx_to_rgba_in_place(pixels: &mut [u8]) -> PdfResult<()> {
+    if pixels.len() % 4 != 0 {
+        return Err(PdfError::Render(format!(
+            "invalid tightly-packed BGRx buffer length ({})",
+            pixels.len()
+        )));
+    }
+
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+        // BGRx's fourth byte is undefined. The bitmap is cleared to opaque
+        // white before rendering, so expose a consistently opaque RGBA frame.
+        pixel[3] = 255;
+    }
+    Ok(())
 }
 
 impl Document {
-    pub fn page_sizes(&self) -> PdfResult<Vec<PageSize>> {
+    /// Returns one page size, using the complete size cache when it has already
+    /// been populated. Thumbnail generation can use this without walking every
+    /// page in a large document.
+    pub fn page_size(&self, page_index: u32) -> PdfResult<PageSize> {
+        if page_index >= self.page_count {
+            return Err(PdfError::InvalidPage(page_index));
+        }
+        if let Some(sizes) = self.page_sizes_cache.lock().as_ref() {
+            return sizes
+                .get(page_index as usize)
+                .cloned()
+                .ok_or(PdfError::InvalidPage(page_index));
+        }
+
         self.with_doc(|doc| {
-            let pages = doc.pages();
-            let mut sizes = Vec::with_capacity(pages.len() as usize);
-            for i in 0..pages.len() {
-                let page = pages.get(i).map_err(|e| PdfError::Render(e.to_string()))?;
-                sizes.push(PageSize {
-                    width: page.width().value,
-                    height: page.height().value,
-                });
-            }
-            Ok(sizes)
+            let size = doc
+                .pages()
+                .page_size(page_index as u16)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            Ok(PageSize {
+                width: size.width().value,
+                height: size.height().value,
+            })
         })
+    }
+
+    pub fn page_sizes(&self) -> PdfResult<Vec<PageSize>> {
+        let mut cache = self.page_sizes_cache.lock();
+        if let Some(sizes) = cache.as_ref() {
+            return Ok(sizes.to_vec());
+        }
+
+        let sizes: Vec<PageSize> = self.with_doc(|doc| -> PdfResult<Vec<PageSize>> {
+            doc.pages()
+                .page_sizes()
+                .map_err(|e| PdfError::Render(e.to_string()))
+                .map(|sizes| {
+                    sizes
+                        .into_iter()
+                        .map(|size| PageSize {
+                            width: size.width().value,
+                            height: size.height().value,
+                        })
+                        .collect()
+                })
+        })?;
+        let sizes: Arc<[PageSize]> = sizes.into();
+        *cache = Some(Arc::clone(&sizes));
+        Ok(sizes.to_vec())
     }
 
     /// Render one page to raw RGBA pixel data.
@@ -145,6 +203,81 @@ impl Document {
     /// Flat RGBA `Vec<u8>` of `width × height × 4` bytes, alpha = 255
     /// everywhere (fully composited against the opaque white background).
     pub fn render_page_raw(&self, req: RenderRequest) -> PdfResult<RawPage> {
+        let (mut rgba, width, height) = self.render_page_bgrx_buffer(req, 0)?;
+        // This scan is pure Rust work. Keep it outside the process-wide
+        // PDFium gate so the next native operation can start immediately.
+        bgrx_to_rgba_in_place(&mut rgba)?;
+        Ok(RawPage {
+            rgba,
+            width,
+            height,
+        })
+    }
+
+    /// Render directly into the final binary IPC response buffer.
+    ///
+    /// The first eight bytes contain little-endian width and height followed
+    /// by tightly-packed RGBA pixels. Pdfium writes into the pixel portion of
+    /// this allocation directly, avoiding the previous native-bitmap copy,
+    /// RGBA allocation, and response-buffer copy for every page.
+    pub fn render_page_ipc(&self, req: RenderRequest) -> PdfResult<Vec<u8>> {
+        const HEADER_LEN: usize = 8;
+        let (mut response, width, height) = self.render_page_bgrx_buffer(req, HEADER_LEN)?;
+        bgrx_to_rgba_in_place(&mut response[HEADER_LEN..])?;
+        response[0..4].copy_from_slice(&width.to_le_bytes());
+        response[4..8].copy_from_slice(&height.to_le_bytes());
+        Ok(response)
+    }
+
+    /// Return caller-owned BGRx pixels after releasing the global PDFium gate.
+    fn render_page_bgrx_buffer(
+        &self,
+        req: RenderRequest,
+        prefix_len: usize,
+    ) -> PdfResult<(Vec<u8>, u32, u32)> {
+        let page_size = self.page_size(req.page_index)?;
+        let (px_w, px_h) = checked_render_dimensions(page_size.width, page_size.height, req.scale)?;
+        let width =
+            u32::try_from(px_w).map_err(|_| PdfError::Render("negative render width".into()))?;
+        let height =
+            u32::try_from(px_h).map_err(|_| PdfError::Render("negative render height".into()))?;
+        let pixel_len = usize::try_from(width)
+            .ok()
+            .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| PdfError::Render("render buffer size overflow".into()))?;
+        let buffer_len = prefix_len
+            .checked_add(pixel_len)
+            .ok_or_else(|| PdfError::Render("render response size overflow".into()))?;
+
+        // Reserve and commit the frame outside PDFIUM_GATE. Zero-filling a
+        // 24 MiB buffer can otherwise make unrelated visible-page work wait
+        // even though it does not touch the native library.
+        let mut buffer = Vec::new();
+        buffer.try_reserve_exact(buffer_len).map_err(|_| {
+            PdfError::Render(format!(
+                "unable to allocate {} MiB page buffer",
+                buffer_len.div_ceil(1024 * 1024)
+            ))
+        })?;
+        buffer.resize(buffer_len, 0);
+
+        // PdfRenderConfig defaults that matter here:
+        //   clear_before_render = true   ← FPDFBitmap_FillRect called before FPDF_RenderPageBitmap
+        //
+        // BGRx plus an opaque white clear gives PDFium an opaque target for
+        // transparency groups. We normalize byte order after releasing the
+        // native gate.
+        let config = PdfRenderConfig::new()
+            .set_target_width(px_w)
+            .set_target_height(px_h)
+            .set_format(PdfBitmapFormat::BGRx)
+            .set_clear_color(PdfColor::WHITE)
+            .render_annotations(true)
+            // Interactive widgets are drawn by the HTML form layer.
+            .render_form_data(false)
+            .set_reverse_byte_order(false);
+
         self.with_doc(|doc| {
             let pages = doc.pages();
             if req.page_index >= pages.len() as u32 {
@@ -154,74 +287,43 @@ impl Document {
                 .get(req.page_index as u16)
                 .map_err(|e| PdfError::Render(e.to_string()))?;
 
-            let page_w = page.width().value;
-            let page_h = page.height().value;
+            {
+                let pixels = &mut buffer[prefix_len..];
+                // SAFETY: checked_render_dimensions() guarantees positive,
+                // bounded dimensions; pixel_len is exactly width*height*4 for
+                // BGRx. The Vec cannot reallocate while PdfBitmap borrows this
+                // slice, and the bitmap is dropped before the buffer is moved
+                // or color-normalized. PDFium does not free caller memory when
+                // FPDFBitmap_Destroy() closes an externally backed bitmap.
+                let mut bitmap = unsafe {
+                    PdfBitmap::from_bytes(
+                        px_w,
+                        px_h,
+                        PdfBitmapFormat::BGRx,
+                        pixels,
+                        page.bindings(),
+                    )
+                }
+                .map_err(|e| PdfError::Render(format!("failed to allocate PDFium bitmap: {e}")))?;
 
-            let (px_w, px_h) = checked_render_dimensions(page_w, page_h, req.scale)?;
-
-            // PdfRenderConfig defaults that matter here:
-            //   clear_before_render = true   ← FPDFBitmap_FillRect called before FPDF_RenderPageBitmap
-            //
-            // Explicit settings deliberately keep the display render path
-            // minimal. In particular, LCD_TEXT and PRINTING are not enabled:
-            // they can change compositing/font behavior and are inappropriate
-            // for a CSS-scaled screen bitmap.
-            //
-            // BGRx plus an opaque white clear gives PDFium an opaque target for
-            // transparency groups. We leave byte order native and normalize it
-            // ourselves after rendering.
-            let config = PdfRenderConfig::new()
-                .set_target_width(px_w)
-                .set_target_height(px_h)
-                .set_format(PdfBitmapFormat::BGRx)
-                .set_clear_color(PdfColor::WHITE)
-                .render_annotations(true)
-                // Interactive widgets are drawn by the HTML form layer.
-                .render_form_data(false)
-                .set_reverse_byte_order(false);
-
-            let bitmap = page.render_with_config(&config).map_err(|e| {
-                PdfError::Render(format!(
-                    "pdfium render error (page {}, {}×{}): {}",
-                    req.page_index, px_w, px_h, e
-                ))
-            })?;
-
-            let w = usize::try_from(bitmap.width())
-                .map_err(|_| PdfError::Render("PDFium returned a negative bitmap width".into()))?;
-            let h = usize::try_from(bitmap.height())
-                .map_err(|_| PdfError::Render("PDFium returned a negative bitmap height".into()))?;
-            if w == 0 || h == 0 {
-                return Err(PdfError::Render(format!(
-                    "PDFium returned an empty bitmap for page {}",
-                    req.page_index
-                )));
+                page.render_into_bitmap_with_config(&mut bitmap, &config)
+                    .map_err(|e| {
+                        PdfError::Render(format!(
+                            "pdfium render error (page {}, {}×{}): {}",
+                            req.page_index, px_w, px_h, e
+                        ))
+                    })?;
             }
 
-            // `as_raw_bytes()` returns stride * height bytes; stride may exceed
-            // width * 4 due to alignment padding.  Strip the padding per-row
-            // while doing the BGRx→RGBA channel swap.
-            let raw = bitmap.as_raw_bytes();
-            if raw.len() % h != 0 {
-                return Err(PdfError::Render(format!(
-                    "PDFium returned a malformed bitmap buffer for page {}",
-                    req.page_index
-                )));
-            }
-            let stride = raw.len() / h;
-            let rgba = bgrx_stride_to_rgba(&raw, w, h, stride)?;
+            Ok(())
+        })?;
 
-            Ok(RawPage {
-                rgba,
-                width: w as u32,
-                height: h as u32,
-            })
-        })
+        Ok((buffer, width, height))
     }
 
     /// Render one page to JPEG bytes (thumbnails only — small, lossy is fine).
     pub fn render_page_jpeg(&self, req: RenderRequest) -> PdfResult<Vec<u8>> {
-        self.with_doc(|doc| {
+        let (raw, w, h, stride) = self.with_doc(|doc| {
             let pages = doc.pages();
             if req.page_index >= pages.len() as u32 {
                 return Err(PdfError::InvalidPage(req.page_index));
@@ -268,21 +370,22 @@ impl Document {
                 )));
             }
             let stride = raw.len() / h;
-            let rgba = bgrx_stride_to_rgba(&raw, w, h, stride)?;
+            Ok((raw, w, h, stride))
+        })?;
 
-            // RGBA → RGB (drop alpha, all pixels are fully opaque anyway) → JPEG
-            let rgb_img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
-                .map(DynamicImage::ImageRgba8)
-                .ok_or_else(|| PdfError::Render("failed to create image".into()))?
-                .into_rgb8();
+        // Conversion and JPEG encoding do not touch PDFium. Keeping them out
+        // of the native-library critical section prevents thumbnails from
+        // delaying visible-page renders and document search.
+        let rgb = bgrx_stride_to_rgb(&raw, w, h, stride)?;
+        let rgb_img = image::RgbImage::from_raw(w as u32, h as u32, rgb)
+            .ok_or_else(|| PdfError::Render("failed to create image".into()))?;
 
-            let mut buf = std::io::Cursor::new(Vec::new());
-            DynamicImage::ImageRgb8(rgb_img)
-                .write_to(&mut buf, image::ImageFormat::Jpeg)
-                .map_err(|e| PdfError::Render(e.to_string()))?;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(rgb_img)
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .map_err(|e| PdfError::Render(e.to_string()))?;
 
-            Ok(buf.into_inner())
-        })
+        Ok(buf.into_inner())
     }
 }
 
@@ -321,27 +424,44 @@ mod tests {
 
         // Exactly the configured pixel budget remains valid.
         assert_eq!(
-            checked_render_dimensions(4_096.0, 8_192.0, 1.0).unwrap(),
-            (4_096, 8_192)
+            checked_render_dimensions(2_000.0, 3_000.0, 1.0).unwrap(),
+            (2_000, 3_000)
         );
     }
 
     #[test]
-    fn bgrx_conversion_skips_padding_and_forces_opaque_alpha() {
+    fn bgrx_conversion_skips_padding() {
         let raw = [
             1, 2, 3, 0, 4, 5, 6, 17, 99, 99, 99, 99, // row 0 + padding
             7, 8, 9, 42, 10, 11, 12, 128, 88, 88, 88, 88, // row 1 + padding
         ];
 
         assert_eq!(
-            bgrx_stride_to_rgba(&raw, 2, 2, 12).unwrap(),
-            vec![3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255, 12, 11, 10, 255,]
+            bgrx_stride_to_rgb(&raw, 2, 2, 12).unwrap(),
+            vec![3, 2, 1, 6, 5, 4, 9, 8, 7, 12, 11, 10]
         );
     }
 
     #[test]
     fn bgrx_conversion_rejects_malformed_layout() {
-        assert!(bgrx_stride_to_rgba(&[0; 8], 2, 1, 7).is_err());
-        assert!(bgrx_stride_to_rgba(&[0; 7], 1, 2, 4).is_err());
+        assert!(bgrx_stride_to_rgb(&[0; 8], 2, 1, 7).is_err());
+        assert!(bgrx_stride_to_rgb(&[0; 7], 1, 2, 4).is_err());
+    }
+
+    #[test]
+    fn in_place_bgrx_conversion_handles_odd_pixel_counts() {
+        let mut pixels = vec![
+            1, 2, 3, 0, // BGRx pixel 1
+            4, 5, 6, 17, // BGRx pixel 2
+            7, 8, 9, 128, // BGRx pixel 3
+        ];
+        bgrx_to_rgba_in_place(&mut pixels).unwrap();
+        assert_eq!(pixels, vec![3, 2, 1, 255, 6, 5, 4, 255, 9, 8, 7, 255]);
+    }
+
+    #[test]
+    fn in_place_bgrx_conversion_rejects_partial_pixels() {
+        assert!(bgrx_to_rgba_in_place(&mut [0; 3]).is_err());
+        assert!(bgrx_to_rgba_in_place(&mut [0; 5]).is_err());
     }
 }

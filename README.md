@@ -7,7 +7,7 @@ A fast, small-footprint, modern PDF reader for Windows with annotations, AcroFor
 
 ## Status
 
-Current release: 1.0.1. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current release: 1.1.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Design goals
 
@@ -76,6 +76,23 @@ Create release artifacts with the supplied scripts:
 # Requires NSIS 3.x on PATH.
 .\scripts\build-installer.ps1
 ```
+
+## Publishing releases
+
+Pushing an annotated semantic-version tag runs the GitHub Actions release workflow. The workflow verifies that the tag matches the versions in `Cargo.toml`, `crates/app/tauri.conf.json`, and `frontend/package.json`; runs the frontend and Rust checks; builds the portable ZIP and NSIS installer; and publishes both assets to a GitHub release.
+
+```powershell
+git tag -a v1.1.0 -m "simple.pdf 1.1.0"
+git push origin v1.1.0
+```
+
+The matching version section must already exist in `CHANGELOG.md`. To sign CI-built binaries, configure these GitHub Actions repository secrets:
+
+- `WINDOWS_CERTIFICATE_BASE64` — base64-encoded PFX certificate
+- `WINDOWS_CERTIFICATE_PASSWORD` — PFX password
+- `WINDOWS_TIMESTAMP_URL` — Authenticode timestamp server URL
+
+If none of these secrets are configured, the workflow publishes unsigned binaries with an explicit warning in the release notes. Supplying only some of them fails the release.
 
 Public releases should be Authenticode-signed with a trusted code-signing certificate. The build scripts enable Tauri signing when both variables below are set; without them, they emit an explicit unsigned-build warning:
 

@@ -1,4 +1,5 @@
 import type { PageSize } from "../lib/ipc";
+import { clearDocumentFrames } from "../lib/pageRenderCache";
 
 export type ZoomMode = "custom" | "fit-width" | "fit-page";
 export type Rotation = 0 | 90 | 180 | 270;
@@ -147,4 +148,5 @@ export function createViewerStore(docId: string): ViewerStore {
 /** Release all retained viewer state for a closed document. */
 export function disposeViewerStore(docId: string): void {
   viewerStores.delete(docId);
+  clearDocumentFrames(docId);
 }

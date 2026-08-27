@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { untrack } from "svelte";
-  import { renderPagePixels, type TextSpan, type Annotation, type AnnRect, type FormField } from "../lib/ipc";
+  import { onDestroy } from "svelte";
+  import { type TextSpan, type Annotation, type AnnRect, type FormField, type LinkTarget } from "../lib/ipc";
+  import { requestPageFrame, type PageFrame, type PageFrameRequest } from "../lib/pageRenderCache";
   import { CSS_PIXELS_PER_POINT } from "../stores/viewer.svelte";
 
   export interface Highlight {
@@ -8,15 +9,16 @@
     top: number;
     width: number;
     height: number;
+    active?: boolean;
   }
 
   // ── Named constants ──────────────────────────────────────────────────────────
   /** Short delay lets a visible page start before its prefetch neighbours. */
-  const PREFETCH_RENDER_DELAY_MS = 90;
-  /** Coalesce rapid zoom steps before they enter PDFium's serialized queue. */
-  const VISIBLE_RENDER_DELAY_MS = 35;
+  const PREFETCH_RENDER_DELAY_MS = 40;
+  /** Visible/cache-hit work should paint in the current event-loop turn. */
+  const VISIBLE_RENDER_DELAY_MS = 0;
   /** Full-page bitmaps need a hard ceiling until the renderer is tiled. */
-  const MAX_RENDER_PIXELS = 10_000_000;
+  const MAX_RENDER_PIXELS = 6_000_000;
 
   type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "ink";
 
@@ -53,6 +55,7 @@
     onTextSelected?: (rects: AnnRect[]) => void;
     onInkStroke?: (paths: [number, number][][]) => void;
     onDeleteAnnotation?: (annotIndex: number) => void;
+    onLinkActivate?: (target: LinkTarget) => void;
     onFieldText?: (annotIndex: number, value: string) => void;
     onFieldChecked?: (annotIndex: number, checked: boolean) => void;
     onPushButton?: (annotIndex: number) => void;
@@ -70,6 +73,7 @@
     inkColor = [255, 0, 0],
     inkWidth = 2,
     onPageClick, onTextSelected, onInkStroke, onDeleteAnnotation,
+    onLinkActivate,
     onFieldText, onFieldChecked, onPushButton,
   }: Props = $props();
 
@@ -109,7 +113,7 @@
   let lastPaintedKey = "";
 
   /** Paint a cached or freshly-rendered frame onto the canvas. */
-  function paint(frame: { width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> }) {
+  function paint(frame: PageFrame) {
     const canvas = canvasEl;
     if (!canvas) return;
     // Setting canvas.width clears the buffer; putImageData follows in the
@@ -138,6 +142,10 @@
     lastPaintedKey = "";
   }
 
+  // Explicitly relinquish WebView2's backing store instead of waiting for a
+  // detached canvas to be discovered by garbage collection.
+  onDestroy(releaseCanvas);
+
   function retryRender() {
     renderError = "";
     retryVersion += 1;
@@ -150,7 +158,7 @@
     if (!visible) {
       // Release large backing stores once a page is safely outside the prefetch
       // range. A short grace period prevents churn at observer boundaries.
-      const releaseTimer = setTimeout(releaseCanvas, 250);
+      const releaseTimer = setTimeout(releaseCanvas, 1_500);
       return () => clearTimeout(releaseTimer);
     }
 
@@ -163,21 +171,29 @@
       return;
     }
 
-    // Priority affects only the initial scheduling delay. Do not make it an
-    // effect dependency: crossing the prefetch/viewport boundary must not
-    // cancel and duplicate an otherwise identical render.
-    const delay = untrack(() => priority)
+    // Reading priority here lets an entering page promote a queued prefetch
+    // request. The shared scheduler deduplicates the identical frame key.
+    const isPriority = priority;
+    const delay = isPriority
       ? VISIBLE_RENDER_DELAY_MS
       : PREFETCH_RENDER_DELAY_MS;
     const generation = ++renderGeneration;
     let cancelled = false;
+    let request: PageFrameRequest | undefined;
     rendering = true;
 
     // Keep the previous frame visible while the replacement is in flight.
     const renderTimer = setTimeout(() => {
       if (cancelled) return;
 
-      renderPagePixels(id, idx, scale)
+      request = requestPageFrame({
+        docId: id,
+        pageIndex: idx,
+        scale,
+        version: annotationsVersion,
+        priority: isPriority ? 0 : 1,
+      });
+      request.promise
         .then((frame) => {
           if (cancelled || generation !== renderGeneration) return;
           lastPaintedKey = frameKey;
@@ -193,6 +209,7 @@
     return () => {
       cancelled = true;
       clearTimeout(renderTimer);
+      request?.cancel();
     };
   });
 
@@ -368,7 +385,7 @@
 
     <!-- Skeleton: shown while loading for the first time -->
     {#if !hasContent && !renderError}
-      <div class="skeleton" aria-hidden="true">
+      <div class="skeleton" class:skeleton-active={visible && rendering} aria-hidden="true">
         {#if rendering}
           <div class="spinner" aria-hidden="true"></div>
         {/if}
@@ -390,25 +407,36 @@
       here would double-render highlights and turn ink/link/stamp bounds into
       solid blocks.
     -->
-    {#if annotations && annotations.length > 0}
+    {#if visible && annotations && annotations.length > 0}
       <div class="annot-layer">
         {#each annotations as ann}
           {#if ann.kind !== "widget" && ann.kind !== "other"}
-            <div
+            <button
+              type="button"
               class="annot-rect"
+              class:annot-link={ann.kind === "link" && ann.link_target !== null}
               style:left="{ann.rect.left * cssW}px"
               style:top="{ann.rect.top * cssH}px"
               style:width="{ann.rect.width * cssW}px"
               style:height="{ann.rect.height * cssH}px"
-              title={ann.contents ?? ann.kind}
-              role="button"
+              title={ann.contents ?? (ann.link_target?.kind === "uri" ? ann.link_target.uri : ann.link_target?.kind === "page" ? `Page ${ann.link_target.page_index + 1}` : ann.kind)}
+              role={ann.kind === "link" ? "link" : "button"}
               tabindex="0"
               aria-label="Annotation: {ann.kind}{ann.contents ? ` — ${ann.contents}` : ''}"
-              ondblclick={() => onDeleteAnnotation?.(ann.index)}
-              onkeydown={(e) => { if (e.key === "Delete") onDeleteAnnotation?.(ann.index); }}
+              onclick={() => {
+                if (ann.kind === "link" && ann.link_target) onLinkActivate?.(ann.link_target);
+              }}
+              ondblclick={() => {
+                if (ann.kind !== "link") onDeleteAnnotation?.(ann.index);
+              }}
+              onkeydown={(e) => {
+                if (ann.kind !== "link" && e.key === "Delete") {
+                  onDeleteAnnotation?.(ann.index);
+                }
+              }}
             >
               {#if ann.contents}<div class="sticky-popup">{ann.contents}</div>{/if}
-            </div>
+            </button>
           {/if}
         {/each}
       </div>
@@ -432,12 +460,12 @@
     {/if}
 
     <!-- Find highlights -->
-    {#if highlights && highlights.length > 0}
+    {#if visible && highlights && highlights.length > 0}
       <div class="highlight-layer" aria-hidden="true">
         {#each highlights as hl, i}
           <div
             class="highlight-rect"
-            class:active-match={i === activeHighlight}
+            class:active-match={hl.active || i === activeHighlight}
             style:left="{hl.left * cssW}px"
             style:top="{hl.top * cssH}px"
             style:width="{hl.width * cssW}px"
@@ -448,7 +476,7 @@
     {/if}
 
     <!-- AcroForm field overlay -->
-    {#if formFields && formFields.length > 0}
+    {#if visible && formFields && formFields.length > 0}
       <div class="form-layer" aria-label="Form fields">
         {#each formFields as field}
           {#if field.kind === "text"}
@@ -558,6 +586,8 @@
     box-shadow: var(--shadow);
     border-radius: 2px;
     flex-shrink: 0;
+    contain: layout paint style;
+    content-visibility: auto;
   }
 
   .page-inner {
@@ -592,6 +622,12 @@
   .skeleton {
     position: absolute;
     inset: 0;
+    background: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .skeleton-active {
     background: linear-gradient(
       90deg,
       var(--bg-elev) 25%,
@@ -600,9 +636,6 @@
     );
     background-size: 200% 100%;
     animation: shimmer 1.4s ease infinite;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
 
   @keyframes shimmer {
@@ -627,6 +660,7 @@
 
   .error-overlay {
     position: absolute; inset: 0;
+    z-index: 20;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 6px; background: var(--bg-elev);
@@ -646,11 +680,14 @@
   .error-overlay button:hover { border-color: var(--accent); }
 
   /* Transparent annotation interaction layer; PDFium paints appearances. */
-  .annot-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .annot-layer { position: absolute; z-index: 2; inset: 0; overflow: hidden; pointer-events: none; }
   .annot-rect {
     position: absolute; border-radius: 2px;
     pointer-events: auto; cursor: default; background: transparent;
+    border: 0; padding: 0; color: inherit; font: inherit; text-align: left;
   }
+  .annot-link { cursor: pointer; }
+  .annot-link:hover { background: rgba(65, 135, 245, 0.08); }
   .annot-rect:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent); }
   .sticky-popup {
     position: absolute; left: 20px; top: 0;
@@ -664,7 +701,7 @@
   .annot-rect:hover .sticky-popup { display: block; }
 
   /* Text layer — invisible but selectable */
-  .text-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .text-layer { position: absolute; z-index: 1; inset: 0; overflow: hidden; pointer-events: none; }
   .text-span {
     position: absolute;
     color: transparent;
@@ -679,7 +716,7 @@
   .text-span::selection { background: rgba(59, 130, 246, 0.28); }
 
   /* Find highlights */
-  .highlight-layer { position: absolute; inset: 0; pointer-events: none; }
+  .highlight-layer { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
   .highlight-rect {
     position: absolute;
     background: rgba(255, 210, 0, 0.38);
@@ -693,7 +730,7 @@
   }
 
   /* Form fields */
-  .form-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .form-layer { position: absolute; z-index: 3; inset: 0; overflow: hidden; pointer-events: none; }
   .form-field {
     position: absolute; pointer-events: auto; box-sizing: border-box;
     border: 1px solid rgba(0, 100, 255, 0.4);
@@ -711,7 +748,7 @@
   }
 
   /* Ink canvas */
-  .ink-canvas { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+  .ink-canvas { position: absolute; z-index: 4; inset: 0; cursor: crosshair; touch-action: none; }
   .ink-commit {
     position: absolute; bottom: 8px; right: 8px;
     background: var(--accent); color: var(--accent-fg);

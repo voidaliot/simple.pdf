@@ -160,7 +160,7 @@ fn register_pdf_handler() -> Result<(), String> {
     Ok(())
 }
 
-fn open_uri(uri: &str) -> Result<(), String> {
+pub(crate) fn open_uri(uri: &str) -> Result<(), String> {
     let operation = wide_null("open");
     let target = wide_null(uri);
 

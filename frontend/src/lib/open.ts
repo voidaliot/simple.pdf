@@ -68,18 +68,32 @@ async function openNewPath(path: string): Promise<void> {
     title: doc.title,
     pageCount: doc.page_count,
   });
-  // Cache a page-0 thumbnail asynchronously
-  cacheThumbnail(doc.path);
+  // Thumbnail work waits for an idle slice so it cannot delay first-page paint.
+  cacheThumbnail(doc.id, doc.path);
 }
 
 /** Render page 0 as a thumbnail and store the data URL in the recents store. */
-async function cacheThumbnail(path: string): Promise<void> {
+function cacheThumbnail(docId: string, path: string): void {
   const existing = recents.entries.find((e) => e.path === path);
   if (existing?.thumbnail) return;
-  try {
-    const dataUrl = await renderThumbB64(path, 240);
-    recents.setThumbnail(path, dataUrl);
-  } catch {
-    // thumbnail failure is non-fatal
+
+  const renderAndStore = async () => {
+    // A thumbnail may have arrived while this callback was waiting.
+    if (recents.entries.find((entry) => entry.path === path)?.thumbnail) return;
+    try {
+      const dataUrl = await renderThumbB64(docId, 240);
+      recents.setThumbnail(path, dataUrl);
+    } catch {
+      // Thumbnail failure is non-fatal (the tab may have closed while idle).
+    }
+  };
+
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+  };
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(() => void renderAndStore(), { timeout: 2_000 });
+  } else {
+    window.setTimeout(() => void renderAndStore(), 250);
   }
 }

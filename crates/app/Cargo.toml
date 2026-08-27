@@ -32,7 +32,6 @@ tauri-plugin-os = { workspace = true }
 tauri-plugin-single-instance = { workspace = true }
 
 reqwest = { workspace = true }
-urlencoding = { workspace = true }
 base64 = { workspace = true }
 
 shared-types = { path = "../shared-types" }
@@ -42,6 +41,7 @@ pdf-core = { path = "../pdf-core" }
 winreg = "0.52"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

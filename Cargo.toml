@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -19,7 +19,7 @@ anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 parking_lot = "0.12"
 tracing = "0.1"
@@ -35,7 +35,6 @@ tauri-plugin-os = "2"
 tauri-plugin-single-instance = "2"
 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
-urlencoding = "2"
 base64 = "0.22"
 
 pdfium-render = { version = "0.8", default-features = false, features = ["image", "pdfium_6666"] }
@@ -48,6 +47,12 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 incremental = false
+
+# Rendering and full-document text indexing are latency-sensitive hot paths.
+# Keep the small shell size-optimized while allowing pdf-core's pixel scans and
+# search normalization loops to use the optimizer's fastest code generation.
+[profile.release.package.pdf-core]
+opt-level = 3
 
 [profile.dev]
 opt-level = 0
