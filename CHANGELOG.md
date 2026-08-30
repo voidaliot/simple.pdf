@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0 — 2026-08-30
+
+- Make the custom title bar practical on Surface-class tablets with larger touch targets, persistent tab-close controls, horizontal tab swiping, and a dedicated touch/pen window-drag handle, while preserving the compact mouse layout.
+
 ## 1.1.0 — 2026-08-27
 
 - Load each opened PDF from a complete in-memory source snapshot for seek-free page access while enforcing a process-wide resident-source budget.

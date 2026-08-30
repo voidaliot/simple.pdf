@@ -7,7 +7,7 @@ A fast, small-footprint, modern PDF reader for Windows with annotations, AcroFor
 
 ## Status
 
-Current release: 1.1.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current release: 1.2.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Design goals
 
@@ -82,8 +82,8 @@ Create release artifacts with the supplied scripts:
 Pushing an annotated semantic-version tag runs the GitHub Actions release workflow. The workflow verifies that the tag matches the versions in `Cargo.toml`, `crates/app/tauri.conf.json`, and `frontend/package.json`; runs the frontend and Rust checks; builds the portable ZIP and NSIS installer; and publishes both assets to a GitHub release.
 
 ```powershell
-git tag -a v1.1.0 -m "simple.pdf 1.1.0"
-git push origin v1.1.0
+git tag -a v1.2.0 -m "simple.pdf 1.2.0"
+git push origin v1.2.0
 ```
 
 The matching version section must already exist in `CHANGELOG.md`. To sign CI-built binaries, configure these GitHub Actions repository secrets:

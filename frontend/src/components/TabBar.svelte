@@ -214,6 +214,19 @@
       console.error("failed to close window", error);
     }
   }
+
+  async function startTouchWindowDrag(e: PointerEvent) {
+    // Tauri's built-in drag-region handler listens for mouse events. Start the
+    // native window drag directly for touch and pen input so the dedicated
+    // handle works as soon as a finger or stylus moves.
+    if (!appWindow || !["touch", "pen"].includes(e.pointerType) || !e.isPrimary || e.button !== 0) return;
+    e.preventDefault();
+    try {
+      await appWindow.startDragging();
+    } catch (error) {
+      console.error("failed to start window drag", error);
+    }
+  }
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeyDown} />
@@ -301,7 +314,12 @@
     <Icon name="plus" size={17} />
   </button>
 
-  <div class="window-drag" data-tauri-drag-region aria-hidden="true"></div>
+  <div
+    class="window-drag"
+    data-tauri-drag-region
+    aria-hidden="true"
+    onpointerdown={startTouchWindowDrag}
+  ></div>
 
   <button class="settings-btn" aria-label="Settings" title="Settings" onclick={() => tabs.openSettings()}>
     <Icon name="settings" size={17} />
@@ -362,7 +380,7 @@
     color: var(--fg); background: var(--control-hover);
   }
   .tab-menu {
-    position: absolute; top: 41px; left: 0; width: min(280px, calc(100vw - 20px));
+    position: absolute; top: calc(var(--chrome-h) - 5px); left: 0; width: min(280px, calc(100vw - 20px));
     max-height: min(420px, calc(100vh - 60px)); overflow: auto;
     padding: 7px; border: 1px solid var(--border); border-radius: 12px;
     background: color-mix(in srgb, var(--bg-elev) 96%, transparent);
@@ -404,6 +422,7 @@
     min-width: 0; max-width: calc(100% - 280px); height: 100%;
     padding-top: 7px; overflow-x: auto; overflow-y: hidden;
     scrollbar-width: none; overscroll-behavior-x: contain;
+    touch-action: pan-x; -webkit-overflow-scrolling: touch;
   }
   .tabs::-webkit-scrollbar { display: none; }
   .tab-shell {
@@ -456,7 +475,16 @@
     align-self: center; margin: 0 3px;
     transform: translateY(3px);
   }
-  .window-drag { min-width: 24px; flex: 1 1 80px; }
+  .window-drag {
+    position: relative; min-width: 24px; flex: 1 1 80px;
+    touch-action: none;
+  }
+  .window-drag::after {
+    content: ""; display: none; pointer-events: none;
+    position: absolute; left: 50%; top: 50%; width: 28px; height: 4px;
+    border-radius: 999px; background: var(--fg-muted); opacity: .8;
+    transform: translate(-50%, -50%);
+  }
   .window-controls { display: flex; align-items: stretch; flex: 0 0 auto; height: var(--chrome-h); margin-left: 2px; }
   .caption-button {
     display: inline-grid; place-items: center;
@@ -481,9 +509,74 @@
     .settings-btn { margin-left: 0; }
   }
 
+  /* Surface-class tablets and other touch-capable Windows devices keep this
+     roomier profile even when a mouse or Type Cover is also connected. */
+  @media (any-pointer: coarse) {
+    .titlebar {
+      --chrome-h: 58px;
+      padding-left: 4px;
+    }
+    .tab-actions-wrap {
+      flex-basis: 50px; width: 50px;
+    }
+    .tab-actions, .new-tab, .settings-btn {
+      width: 44px; height: 44px; flex-basis: 44px;
+      border-radius: 11px; touch-action: manipulation;
+    }
+    .tab-menu {
+      width: min(320px, calc(100vw - 16px));
+      max-height: min(480px, calc(100vh - 72px));
+      padding: 8px;
+    }
+    .menu-heading { padding: 7px 10px 9px; font-size: 12px; }
+    .menu-tab {
+      min-height: 46px; height: 46px; gap: 10px;
+      padding: 0 11px; border-radius: 9px;
+    }
+    .menu-title { font-size: 13px; }
+    .tab-context-menu { min-width: 208px; padding: 6px; border-radius: 11px; }
+    .tab-context-menu button {
+      min-height: 44px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
+      touch-action: manipulation;
+    }
+    .tabs {
+      max-width: calc(100% - 366px);
+      padding-top: 8px;
+    }
+    .tab-shell {
+      min-width: 128px; height: 50px;
+    }
+    .tab-main {
+      height: 50px; gap: 9px; padding: 0 14px;
+      border-radius: 12px 12px 0 0;
+      touch-action: manipulation;
+    }
+    .tab-shell.closable .tab-main { padding-right: 52px; }
+    .title { font-size: 13px; }
+    .tab-shell::before { top: 14px; height: 22px; }
+    .close-tab {
+      right: 3px; top: 3px; width: 44px; height: 44px;
+      border-radius: 10px; opacity: .72;
+      touch-action: manipulation;
+    }
+    .tab-shell .tab-main + .close-tab { opacity: .72; }
+    .new-tab, .settings-btn { margin: 0 3px; transform: translateY(3px); }
+    .window-drag { min-width: 48px; flex-basis: 64px; }
+    .window-drag::after { display: block; }
+    .window-controls { margin-left: 3px; }
+    .caption-button {
+      width: 54px; touch-action: manipulation;
+    }
+    .caption-button:active,
+    .tab-actions:active, .new-tab:active, .settings-btn:active,
+    .close-tab:active { background: var(--control-hover); }
+    .close-window:active { color: #fff; background: #c42b1c; }
+  }
+
   @media (forced-colors: active) {
     .titlebar { border-bottom-color: CanvasText; }
     .tab-main.active { border: 1px solid Highlight; border-bottom: 0; }
     .caption-button:hover, .close-window:hover { color: HighlightText; background: Highlight; }
+    .window-drag::after { background: CanvasText; opacity: 1; }
   }
 </style>
