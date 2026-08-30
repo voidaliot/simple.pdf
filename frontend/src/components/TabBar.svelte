@@ -215,18 +215,6 @@
     }
   }
 
-  async function startTouchWindowDrag(e: PointerEvent) {
-    // Tauri's built-in drag-region handler listens for mouse events. Start the
-    // native window drag directly for touch and pen input so the dedicated
-    // handle works as soon as a finger or stylus moves.
-    if (!appWindow || !["touch", "pen"].includes(e.pointerType) || !e.isPrimary || e.button !== 0) return;
-    e.preventDefault();
-    try {
-      await appWindow.startDragging();
-    } catch (error) {
-      console.error("failed to start window drag", error);
-    }
-  }
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} onkeydown={onWindowKeyDown} />
@@ -314,12 +302,7 @@
     <Icon name="plus" size={17} />
   </button>
 
-  <div
-    class="window-drag"
-    data-tauri-drag-region
-    aria-hidden="true"
-    onpointerdown={startTouchWindowDrag}
-  ></div>
+  <div class="window-drag" data-tauri-drag-region aria-hidden="true"></div>
 
   <button class="settings-btn" aria-label="Settings" title="Settings" onclick={() => tabs.openSettings()}>
     <Icon name="settings" size={17} />
@@ -362,11 +345,11 @@
     position: relative; z-index: 200;
     display: flex; align-items: stretch; flex: 0 0 var(--chrome-h);
     width: 100%; height: var(--chrome-h); min-width: 0;
-    padding-left: 7px; border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
     background: var(--bg-chrome); user-select: none;
   }
   .tab-actions-wrap {
-    position: relative; z-index: 3; display: flex; align-items: center;
+    position: relative; z-index: 3; display: flex; align-items: flex-end;
     flex: 0 0 38px; width: 38px;
   }
   .tab-actions, .new-tab, .settings-btn {
@@ -419,20 +402,20 @@
 
   .tabs {
     display: flex; align-items: flex-end; flex: 0 1 auto;
-    min-width: 0; max-width: calc(100% - 280px); height: 100%;
-    padding-top: 7px; overflow-x: auto; overflow-y: hidden;
+    min-width: 0; height: 100%;
+    padding-top: 8px; overflow-x: auto; overflow-y: hidden;
     scrollbar-width: none; overscroll-behavior-x: contain;
     touch-action: pan-x; -webkit-overflow-scrolling: touch;
   }
   .tabs::-webkit-scrollbar { display: none; }
   .tab-shell {
     position: relative; display: flex; align-items: center;
-    width: 220px; min-width: 72px; max-width: 240px; height: 38px;
-    flex: 1 1 220px; container-type: inline-size;
+    width: 240px; min-width: 96px; max-width: 240px; height: 32px;
+    flex: 1 1 240px; container-type: inline-size; touch-action: pan-x;
   }
   .tab-shell::before {
-    content: ""; position: absolute; z-index: 0; left: 0; top: 11px;
-    width: 1px; height: 17px; background: var(--border); opacity: .72;
+    content: ""; position: absolute; z-index: 0; left: 0; top: 8px;
+    width: 1px; height: 16px; background: var(--border); opacity: .72;
     transition: opacity 100ms ease;
   }
   .tab-shell:first-child::before,
@@ -442,10 +425,11 @@
   .tab-shell:hover + .tab-shell::before { opacity: 0; }
   .tab-main {
     position: relative; z-index: 1; display: inline-flex; align-items: center;
-    width: 100%; height: 38px; min-width: 0; flex: 1; gap: 8px;
+    width: 100%; height: 32px; min-width: 0; flex: 1; gap: 8px;
     padding: 0 12px; border: 1px solid transparent; border-bottom: 0;
-    border-radius: 10px 10px 0 0; background: transparent;
+    border-radius: 9px 9px 0 0; background: transparent;
     color: var(--fg-muted); cursor: pointer; outline: none; font: inherit;
+    touch-action: pan-x;
     transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
   }
   .tab-shell.closable .tab-main { padding-right: 34px; }
@@ -462,28 +446,25 @@
     white-space: nowrap; text-align: left; font-size: 12px;
   }
   .close-tab {
-    position: absolute; z-index: 2; right: 7px; top: 8px;
+    position: absolute; z-index: 2; right: 3px; top: 2px;
     display: flex; align-items: center; justify-content: center;
-    width: 22px; height: 22px; padding: 0; flex-shrink: 0;
-    border: 0; border-radius: 6px; background: transparent;
-    color: inherit; opacity: 0; cursor: pointer;
+    width: 28px; height: 28px; padding: 0; flex-shrink: 0;
+    border: 0; border-radius: 7px; background: transparent;
+    color: inherit; opacity: 0; pointer-events: none; cursor: pointer;
+    touch-action: manipulation;
   }
-  .tab-shell:hover .close-tab, .tab-main.active + .close-tab, .close-tab:focus-visible { opacity: .62; }
+  .tab-shell:hover .close-tab, .tab-main.active + .close-tab, .close-tab:focus-visible {
+    opacity: .62; pointer-events: auto;
+  }
   .close-tab:hover { background: var(--control-hover); opacity: 1 !important; }
 
   .new-tab, .settings-btn {
     align-self: center; margin: 0 3px;
-    transform: translateY(3px);
+    transform: translateY(4px);
   }
   .window-drag {
-    position: relative; min-width: 24px; flex: 1 1 80px;
+    min-width: 64px; flex: 1 1 120px;
     touch-action: none;
-  }
-  .window-drag::after {
-    content: ""; display: none; pointer-events: none;
-    position: absolute; left: 50%; top: 50%; width: 28px; height: 4px;
-    border-radius: 999px; background: var(--fg-muted); opacity: .8;
-    transform: translate(-50%, -50%);
   }
   .window-controls { display: flex; align-items: stretch; flex: 0 0 auto; height: var(--chrome-h); margin-left: 2px; }
   .caption-button {
@@ -503,80 +484,12 @@
   }
 
   @media (max-width: 760px) {
-    .tabs { max-width: calc(100% - 254px); }
-    .tab-shell { min-width: 62px; }
-    .window-drag { min-width: 8px; }
     .settings-btn { margin-left: 0; }
-  }
-
-  /* Surface-class tablets and other touch-capable Windows devices keep this
-     roomier profile even when a mouse or Type Cover is also connected. */
-  @media (any-pointer: coarse) {
-    .titlebar {
-      --chrome-h: 58px;
-      padding-left: 4px;
-    }
-    .tab-actions-wrap {
-      flex-basis: 50px; width: 50px;
-    }
-    .tab-actions, .new-tab, .settings-btn {
-      width: 44px; height: 44px; flex-basis: 44px;
-      border-radius: 11px; touch-action: manipulation;
-    }
-    .tab-menu {
-      width: min(320px, calc(100vw - 16px));
-      max-height: min(480px, calc(100vh - 72px));
-      padding: 8px;
-    }
-    .menu-heading { padding: 7px 10px 9px; font-size: 12px; }
-    .menu-tab {
-      min-height: 46px; height: 46px; gap: 10px;
-      padding: 0 11px; border-radius: 9px;
-    }
-    .menu-title { font-size: 13px; }
-    .tab-context-menu { min-width: 208px; padding: 6px; border-radius: 11px; }
-    .tab-context-menu button {
-      min-height: 44px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
-      touch-action: manipulation;
-    }
-    .tabs {
-      max-width: calc(100% - 366px);
-      padding-top: 8px;
-    }
-    .tab-shell {
-      min-width: 128px; height: 50px;
-    }
-    .tab-main {
-      height: 50px; gap: 9px; padding: 0 14px;
-      border-radius: 12px 12px 0 0;
-      touch-action: manipulation;
-    }
-    .tab-shell.closable .tab-main { padding-right: 52px; }
-    .title { font-size: 13px; }
-    .tab-shell::before { top: 14px; height: 22px; }
-    .close-tab {
-      right: 3px; top: 3px; width: 44px; height: 44px;
-      border-radius: 10px; opacity: .72;
-      touch-action: manipulation;
-    }
-    .tab-shell .tab-main + .close-tab { opacity: .72; }
-    .new-tab, .settings-btn { margin: 0 3px; transform: translateY(3px); }
-    .window-drag { min-width: 48px; flex-basis: 64px; }
-    .window-drag::after { display: block; }
-    .window-controls { margin-left: 3px; }
-    .caption-button {
-      width: 54px; touch-action: manipulation;
-    }
-    .caption-button:active,
-    .tab-actions:active, .new-tab:active, .settings-btn:active,
-    .close-tab:active { background: var(--control-hover); }
-    .close-window:active { color: #fff; background: #c42b1c; }
   }
 
   @media (forced-colors: active) {
     .titlebar { border-bottom-color: CanvasText; }
     .tab-main.active { border: 1px solid Highlight; border-bottom: 0; }
     .caption-button:hover, .close-window:hover { color: HighlightText; background: Highlight; }
-    .window-drag::after { background: CanvasText; opacity: 1; }
   }
 </style>

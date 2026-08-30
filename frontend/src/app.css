@@ -20,7 +20,7 @@
   --danger: #ef4444;
   --radius: 7px;
   --radius-lg: 12px;
-  --chrome-h: 46px;
+  --chrome-h: 40px;
   --shadow-sm: 0 1px 2px rgba(18, 23, 33, 0.055);
   --shadow: 0 4px 16px rgba(18, 23, 33, 0.10);
   --shadow-lg: 0 14px 40px rgba(18, 23, 33, 0.16), 0 2px 8px rgba(18, 23, 33, 0.08);
@@ -115,6 +115,15 @@
 html, body, #app { height: 100%; margin: 0; overflow: hidden; }
 body { background: var(--bg); color: var(--fg); -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; }
+
+/* WebView2 123+ turns this interaction-free spacer into a native Windows
+   caption region. Unlike Tauri's mouse-event fallback, this also supports
+   touch and pen window dragging. Keep the selector narrow so tabs and window
+   controls remain interactive. */
+.window-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
 
 :focus-visible {
   outline: 2px solid var(--accent);

@@ -2,7 +2,8 @@
 
 ## 1.2.0 — 2026-08-30
 
-- Make the custom title bar practical on Surface-class tablets with larger touch targets, persistent tab-close controls, horizontal tab swiping, and a dedicated touch/pen window-drag handle, while preserving the compact mouse layout.
+- Match Windows Explorer's compact 40-DIP tab/title bar while using a native WebView2 caption region for reliable touch and pen dragging, horizontal tab swiping, and a preserved blank grab area.
+- Keep high-DPI and large-window page renders inside the renderer's exact rounded bitmap limits instead of showing a pixel-limit error.
 
 ## 1.1.0 — 2026-08-27
 

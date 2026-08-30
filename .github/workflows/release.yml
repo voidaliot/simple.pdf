@@ -94,6 +94,9 @@ jobs:
       - name: Fetch PDFium
         run: ./scripts/fetch-pdfium.ps1
 
+      - name: Run frontend tests
+        run: pnpm --dir frontend test
+
       - name: Run frontend checks
         run: pnpm --dir frontend check
 

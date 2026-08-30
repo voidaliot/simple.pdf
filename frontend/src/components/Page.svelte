@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import { type TextSpan, type Annotation, type AnnRect, type FormField, type LinkTarget } from "../lib/ipc";
   import { requestPageFrame, type PageFrame, type PageFrameRequest } from "../lib/pageRenderCache";
+  import { boundedRenderScale } from "../lib/renderScale";
   import { CSS_PIXELS_PER_POINT } from "../stores/viewer.svelte";
 
   export interface Highlight {
@@ -17,9 +18,6 @@
   const PREFETCH_RENDER_DELAY_MS = 40;
   /** Visible/cache-hit work should paint in the current event-loop turn. */
   const VISIBLE_RENDER_DELAY_MS = 0;
-  /** Full-page bitmaps need a hard ceiling until the renderer is tiled. */
-  const MAX_RENDER_PIXELS = 6_000_000;
-
   type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "ink";
 
   interface Props {
@@ -82,10 +80,7 @@
   // the rare high-zoom case where the render budget is reached.
   const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
   const cssScale = $derived(zoom * CSS_PIXELS_PER_POINT);
-  const maxRenderScale = $derived(
-    Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, width * height)),
-  );
-  const renderScale = $derived(Math.min(cssScale * dpr, maxRenderScale));
+  const renderScale = $derived(boundedRenderScale(width, height, cssScale * dpr));
 
   // Pre-rotation CSS dimensions
   const cssW = $derived(Math.max(1, Math.round(width * cssScale)));
