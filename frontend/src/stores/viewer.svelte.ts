@@ -1,8 +1,14 @@
 import type { PageSize } from "../lib/ipc";
 import { clearDocumentFrames } from "../lib/pageRenderCache";
+import {
+  fittedZoomForSpread,
+  spreadExtentForPage,
+  type PageLayout,
+  type Rotation,
+} from "../lib/viewLayout";
 
 export type ZoomMode = "custom" | "fit-width" | "fit-page";
-export type Rotation = 0 | 90 | 180 | 270;
+export type { PageLayout, Rotation } from "../lib/viewLayout";
 
 /** CSS pixels occupied by one PDF point at semantic 100% zoom. */
 export const CSS_PIXELS_PER_POINT = 96 / 72;
@@ -44,34 +50,36 @@ function buildViewerStore(docId: string) {
   let containerWidth = $state(800);
   let containerHeight = $state(600);
   let rotation = $state<Rotation>(0);
+  let pageLayout = $state<PageLayout>("single");
   let scrollLeft = $state(0);
   let scrollTop = $state(0);
 
-  function fitWidthZoomFor(page: PageSize | undefined): number {
-    if (!page) return 1.0;
-    const pageWidth = rotation === 90 || rotation === 270 ? page.height : page.width;
-    const availableWidth = Math.max(1, containerWidth - VIEWPORT_HORIZONTAL_INSET_PX);
-    return clampFitZoom(availableWidth / (pageWidth * CSS_PIXELS_PER_POINT));
+  function fitWidthZoomFor(pageIndex: number): number {
+    const spread = spreadExtentForPage(pageSizes, pageIndex, pageLayout, rotation);
+    if (!spread) return 1.0;
+    return clampFitZoom(fittedZoomForSpread(spread, {
+      containerWidth,
+      cssPixelsPerPoint: CSS_PIXELS_PER_POINT,
+      horizontalInset: VIEWPORT_HORIZONTAL_INSET_PX,
+    }));
   }
 
-  function fitPageZoomFor(page: PageSize | undefined): number {
-    if (!page) return 1.0;
-    const rotated = rotation === 90 || rotation === 270;
-    const pageWidth = rotated ? page.height : page.width;
-    const pageHeight = rotated ? page.width : page.height;
-    const availableWidth = Math.max(1, containerWidth - VIEWPORT_HORIZONTAL_INSET_PX);
-    const availableHeight = Math.max(1, containerHeight - VIEWPORT_VERTICAL_INSET_PX);
-    return clampFitZoom(Math.min(
-      availableWidth / (pageWidth * CSS_PIXELS_PER_POINT),
-      availableHeight / (pageHeight * CSS_PIXELS_PER_POINT),
-    ));
+  function fitPageZoomFor(pageIndex: number): number {
+    const spread = spreadExtentForPage(pageSizes, pageIndex, pageLayout, rotation);
+    if (!spread) return 1.0;
+    return clampFitZoom(fittedZoomForSpread(spread, {
+      containerWidth,
+      containerHeight,
+      cssPixelsPerPoint: CSS_PIXELS_PER_POINT,
+      horizontalInset: VIEWPORT_HORIZONTAL_INSET_PX,
+      verticalInset: VIEWPORT_VERTICAL_INSET_PX,
+    }));
   }
 
   /** Resolve zoom per page so mixed-size documents never reflow on page changes. */
   function zoomForPage(pageIndex: number): number {
-    const page = pageSizes[pageIndex] ?? pageSizes[0];
-    if (zoomMode === "fit-width") return fitWidthZoomFor(page);
-    if (zoomMode === "fit-page") return fitPageZoomFor(page);
+    if (zoomMode === "fit-width") return fitWidthZoomFor(pageIndex);
+    if (zoomMode === "fit-page") return fitPageZoomFor(pageIndex);
     return zoom;
   }
 
@@ -90,6 +98,7 @@ function buildViewerStore(docId: string) {
   function zoomOut() { setZoom(snapZoomDown(effectiveZoom)); }
 
   function setZoomMode(m: ZoomMode) { zoomMode = m; }
+  function setPageLayout(layout: PageLayout) { pageLayout = layout; }
   function setCurrentPage(p: number) { currentPage = p; }
   function setPageSizes(sizes: PageSize[]) { pageSizes = sizes; }
   function setContainerSize(width: number, height: number) {
@@ -115,6 +124,7 @@ function buildViewerStore(docId: string) {
     get containerHeight() { return containerHeight; },
     get effectiveZoom() { return effectiveZoom; },
     get rotation() { return rotation; },
+    get pageLayout() { return pageLayout; },
     get scrollLeft() { return scrollLeft; },
     get scrollTop() { return scrollTop; },
     zoomForPage,
@@ -122,6 +132,7 @@ function buildViewerStore(docId: string) {
     zoomIn,
     zoomOut,
     setZoomMode,
+    setPageLayout,
     setCurrentPage,
     setPageSizes,
     setContainerSize,

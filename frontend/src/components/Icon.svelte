@@ -13,6 +13,7 @@
     | "chevron-down"
     | "fit-width"
     | "fit-page"
+    | "dual-page"
     | "rotate-left"
     | "rotate-right"
     | "highlight"
@@ -79,6 +80,9 @@
   {:else if name === "fit-page"}
     <path d="M8 3H4a1 1 0 0 0-1 1v4M16 3h4a1 1 0 0 1 1 1v4M8 21H4a1 1 0 0 1-1-1v-4M16 21h4a1 1 0 0 0 1-1v-4" />
     <rect x="7" y="5.5" width="10" height="13" rx="1" />
+  {:else if name === "dual-page"}
+    <rect x="2.5" y="4.5" width="8.5" height="15" rx="1" />
+    <rect x="13" y="4.5" width="8.5" height="15" rx="1" />
   {:else if name === "rotate-left"}
     <path d="M4 4v6h6" />
     <path d="M5.5 17.5A8 8 0 1 0 4.2 10" />

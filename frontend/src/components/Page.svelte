@@ -1,9 +1,22 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { type TextSpan, type Annotation, type AnnRect, type FormField, type LinkTarget } from "../lib/ipc";
   import { requestPageFrame, type PageFrame, type PageFrameRequest } from "../lib/pageRenderCache";
-  import { boundedRenderScale } from "../lib/renderScale";
+  import {
+    boundedRenderScale,
+    createTiledRenderPlan,
+    fallbackCssPageDimensions,
+    MAX_RENDER_DIMENSION,
+    MAX_RENDER_PIXELS,
+    normalizedPagePointForRotation,
+    renderRasterIdentity,
+    renderTileRangeForBounds,
+    type RenderPixelBounds,
+    type RenderTile,
+    type TiledRenderPlan,
+  } from "../lib/renderScale";
   import { CSS_PIXELS_PER_POINT } from "../stores/viewer.svelte";
+  import PageTile from "./PageTile.svelte";
 
   export interface Highlight {
     left: number;
@@ -31,6 +44,10 @@
     height: number;
     /** Semantic zoom factor where 1.0 means 100% (96 CSS dpi). */
     zoom: number;
+    /** Current browser device-pixel ratio; changes when moving between monitors. */
+    devicePixelRatio?: number;
+    /** Invalidates tile visibility geometry when the page row layout changes. */
+    pageLayout?: "single" | "dual";
     /** Whether this page is currently in the viewport or prefetch zone. */
     visible: boolean;
     /** True when the page intersects the real viewport (not only the prefetch zone). */
@@ -60,7 +77,10 @@
   }
 
   let {
-    docId, pageIndex, width, height, zoom, visible, priority = false,
+    docId, pageIndex, width, height, zoom,
+    devicePixelRatio = window.devicePixelRatio || 1,
+    pageLayout = "single",
+    visible, priority = false,
     rotation = 0,
     textSpans, highlights, activeHighlight = -1,
     annotations,
@@ -75,27 +95,88 @@
     onFieldText, onFieldChecked, onPushButton,
   }: Props = $props();
 
-  // Cap DPR to keep full-page backing stores within a predictable memory budget.
-  // The canvas is still laid out at the native CSS size and the browser smooths
-  // the rare high-zoom case where the render budget is reached.
-  const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-  const cssScale = $derived(zoom * CSS_PIXELS_PER_POINT);
-  const renderScale = $derived(boundedRenderScale(width, height, cssScale * dpr));
+  interface RenderPlanResult {
+    plan?: TiledRenderPlan;
+    error: string;
+  }
 
-  // Pre-rotation CSS dimensions
-  const cssW = $derived(Math.max(1, Math.round(width * cssScale)));
-  const cssH = $derived(Math.max(1, Math.round(height * cssScale)));
+  interface ActiveRenderTile {
+    tile: RenderTile;
+    priority: boolean;
+  }
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function safeCssDimension(points: number, scale: number): number {
+    const value = points * scale;
+    return Number.isFinite(value) && value > 0 ? Math.max(1, value) : 1;
+  }
+
+  const dpr = $derived(
+    Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1,
+  );
+  const cssScale = $derived(zoom * CSS_PIXELS_PER_POINT);
+  const renderPlanResult = $derived.by((): RenderPlanResult => {
+    try {
+      return { plan: createTiledRenderPlan(width, height, cssScale, dpr), error: "" };
+    } catch (error) {
+      return { error: errorMessage(error) };
+    }
+  });
+  const renderPlan = $derived(renderPlanResult.plan);
+  const planError = $derived(renderPlanResult.error);
+  const fallbackCssSize = $derived(
+    fallbackCssPageDimensions(width, height, cssScale, dpr),
+  );
+  const tiledRender = $derived(
+    renderPlan !== undefined && (
+      renderPlan.pixelWidth > MAX_RENDER_DIMENSION
+        || renderPlan.pixelHeight > MAX_RENDER_DIMENSION
+        || renderPlan.pixelWidth * renderPlan.pixelHeight > MAX_RENDER_PIXELS
+    ),
+  );
+
+  // Derive CSS edges from the exact backing dimensions. This gives every
+  // canvas exactly `dpr` backing pixels per CSS pixel and avoids a one-pixel
+  // browser resample caused by rounding the two sizes independently.
+  const cssW = $derived(
+    renderPlan ? renderPlan.pixelWidth / dpr : fallbackCssSize.width,
+  );
+  const cssH = $derived(
+    renderPlan ? renderPlan.pixelHeight / dpr : fallbackCssSize.height,
+  );
+  const rasterIdentity = $derived(
+    renderPlan
+      ? renderRasterIdentity(renderPlan.scale, renderPlan.pixelWidth, renderPlan.pixelHeight)
+      : "invalid",
+  );
+  const inkRenderScale = $derived(
+    (() => {
+      const value = boundedRenderScale(width, height, cssScale * Math.min(dpr, 2));
+      return Number.isFinite(value) && value > 0 ? value : 1;
+    })(),
+  );
+  const inkPixelWidth = $derived(
+    Math.max(1, Math.round(safeCssDimension(Math.fround(width), inkRenderScale))),
+  );
+  const inkPixelHeight = $derived(
+    Math.max(1, Math.round(safeCssDimension(Math.fround(height), inkRenderScale))),
+  );
 
   // Post-rotation layout dimensions
   const isRotated = $derived(rotation === 90 || rotation === 270);
   const displayW = $derived(isRotated ? cssH : cssW);
   const displayH = $derived(isRotated ? cssW : cssH);
-  const innerTop = $derived(Math.round((displayH - cssH) / 2));
-  const innerLeft = $derived(Math.round((displayW - cssW) / 2));
+  const innerTop = $derived((displayH - cssH) / 2);
+  const innerLeft = $derived((displayW - cssW) / 2);
 
   // ── Canvas render state ──────────────────────────────────────────────────────
   /** The page canvas — always in the DOM so bind:this is valid in the effect. */
   let canvasEl = $state<HTMLCanvasElement | undefined>();
+  let pageWrapperEl = $state<HTMLDivElement | undefined>();
+  let pageInnerEl = $state<HTMLDivElement | undefined>();
   /** True once the canvas has been painted at least once. */
   let hasContent = $state(false);
   /** Non-empty when the last render failed. */
@@ -104,8 +185,162 @@
   let rendering = $state(false);
   /** Incremented by the retry action to re-run the render effect. */
   let retryVersion = $state(0);
+  let activeTiles = $state<ActiveRenderTile[]>([]);
+  let tileErrors = $state<Map<string, string>>(new Map());
   let renderGeneration = 0;
   let lastPaintedKey = "";
+  let virtualizerFrame: number | undefined;
+
+  const tileRenderError = $derived(tileErrors.values().next().value ?? "");
+  const displayedRenderError = $derived(planError || renderError || tileRenderError);
+
+  function handleTileRenderError(tileIdentity: string, message: string) {
+    const next = new Map(tileErrors);
+    if (message) next.set(tileIdentity, message);
+    else next.delete(tileIdentity);
+    tileErrors = next;
+  }
+
+  function normalizedPagePoint(
+    clientX: number,
+    clientY: number,
+    pageRect: DOMRectReadOnly,
+  ) {
+    const displayX = (clientX - pageRect.left) / Math.max(1, pageRect.width);
+    const displayY = (clientY - pageRect.top) / Math.max(1, pageRect.height);
+    return normalizedPagePointForRotation(displayX, displayY, rotation);
+  }
+
+  function rasterBounds(
+    pageRect: DOMRectReadOnly,
+    viewportRect: DOMRectReadOnly,
+    plan: TiledRenderPlan,
+    margin: number,
+  ): RenderPixelBounds | undefined {
+    const clippedLeft = Math.max(pageRect.left, viewportRect.left - margin);
+    const clippedTop = Math.max(pageRect.top, viewportRect.top - margin);
+    const clippedRight = Math.min(pageRect.right, viewportRect.right + margin);
+    const clippedBottom = Math.min(pageRect.bottom, viewportRect.bottom + margin);
+    if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) return undefined;
+
+    const corners = [
+      normalizedPagePoint(clippedLeft, clippedTop, pageRect),
+      normalizedPagePoint(clippedRight, clippedTop, pageRect),
+      normalizedPagePoint(clippedRight, clippedBottom, pageRect),
+      normalizedPagePoint(clippedLeft, clippedBottom, pageRect),
+    ];
+    const left = Math.max(0, Math.floor(Math.min(...corners.map((point) => point.nx)) * plan.pixelWidth));
+    const top = Math.max(0, Math.floor(Math.min(...corners.map((point) => point.ny)) * plan.pixelHeight));
+    const right = Math.min(plan.pixelWidth, Math.ceil(Math.max(...corners.map((point) => point.nx)) * plan.pixelWidth));
+    const bottom = Math.min(plan.pixelHeight, Math.ceil(Math.max(...corners.map((point) => point.ny)) * plan.pixelHeight));
+    return right > left && bottom > top ? { left, top, right, bottom } : undefined;
+  }
+
+  function intersects(tile: RenderTile, bounds: RenderPixelBounds | undefined): boolean {
+    return bounds !== undefined
+      && tile.x < bounds.right
+      && tile.x + tile.width > bounds.left
+      && tile.y < bounds.bottom
+      && tile.y + tile.height > bounds.top;
+  }
+
+  function updateActiveTiles() {
+    const wrapper = pageWrapperEl;
+    const inner = pageInnerEl;
+    const plan = renderPlan;
+    const viewport = wrapper?.closest<HTMLElement>(".pages-area");
+    if (!visible || !tiledRender || !wrapper || !inner || !plan || !viewport) {
+      if (activeTiles.length > 0) activeTiles = [];
+      return;
+    }
+
+    const pageRect = inner.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    const visibleBounds = rasterBounds(pageRect, viewportRect, plan, 0);
+    // Keep one tile beyond every visible edge. This bounds live
+    // canvases by viewport area while still rendering the next scroll step.
+    const requestedBounds = rasterBounds(
+      pageRect,
+      viewportRect,
+      plan,
+      plan.tileSize / dpr,
+    );
+    if (!requestedBounds) {
+      if (activeTiles.length > 0) activeTiles = [];
+      return;
+    }
+
+    const range = renderTileRangeForBounds(plan, requestedBounds);
+    if (!range) {
+      if (activeTiles.length > 0) activeTiles = [];
+      return;
+    }
+    const next: ActiveRenderTile[] = [];
+    for (let row = range.minRow; row <= range.maxRow; row += 1) {
+      for (let column = range.minColumn; column <= range.maxColumn; column += 1) {
+        const tile = plan.tiles[row * plan.columns + column];
+        if (tile) next.push({ tile, priority: intersects(tile, visibleBounds) });
+      }
+    }
+
+    const unchanged = next.length === activeTiles.length && next.every((item, index) => {
+      const current = activeTiles[index];
+      return current?.tile.index === item.tile.index && current.priority === item.priority;
+    });
+    if (!unchanged) activeTiles = next;
+  }
+
+  function scheduleTileWindowUpdate() {
+    if (virtualizerFrame !== undefined) return;
+    virtualizerFrame = requestAnimationFrame(() => {
+      virtualizerFrame = undefined;
+      updateActiveTiles();
+    });
+  }
+
+  onMount(() => {
+    const wrapper = pageWrapperEl;
+    const viewport = wrapper?.closest<HTMLElement>(".pages-area");
+    if (!wrapper || !viewport) return;
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined
+      : new ResizeObserver(scheduleTileWindowUpdate);
+    observer?.observe(viewport);
+    observer?.observe(wrapper);
+    viewport.addEventListener("scroll", scheduleTileWindowUpdate, { passive: true });
+    window.addEventListener("resize", scheduleTileWindowUpdate, { passive: true });
+    scheduleTileWindowUpdate();
+    return () => {
+      observer?.disconnect();
+      viewport.removeEventListener("scroll", scheduleTileWindowUpdate);
+      window.removeEventListener("resize", scheduleTileWindowUpdate);
+      if (virtualizerFrame !== undefined) cancelAnimationFrame(virtualizerFrame);
+      virtualizerFrame = undefined;
+    };
+  });
+
+  $effect(() => {
+    // Establish all geometry inputs as dependencies, then defer layout reads to
+    // one animation frame so transforms and CSS dimensions have been applied.
+    renderPlan;
+    tiledRender;
+    rotation;
+    pageLayout;
+    dpr;
+    visible;
+    pageWrapperEl;
+    pageInnerEl;
+    scheduleTileWindowUpdate();
+  });
+
+  $effect(() => {
+    // Errors belong to one exact raster, annotation, and retry generation.
+    rasterIdentity;
+    annotationsVersion;
+    retryVersion;
+    renderError = "";
+    tileErrors = new Map();
+  });
 
   /** Paint a cached or freshly-rendered frame onto the canvas. */
   function paint(frame: PageFrame) {
@@ -143,6 +378,7 @@
 
   function retryRender() {
     renderError = "";
+    tileErrors = new Map();
     retryVersion += 1;
   }
 
@@ -157,10 +393,23 @@
       return () => clearTimeout(releaseTimer);
     }
 
+    const plan = renderPlan;
+    if (!plan) {
+      releaseCanvas();
+      return;
+    }
+
+    // Large pages are rendered by the bounded tile window. A full-frame backing
+    // store from an older raster must not remain attached at the new geometry.
+    if (tiledRender) {
+      releaseCanvas();
+      return;
+    }
+
     const id = docId;
     const idx = pageIndex;
-    const scale = renderScale;
-    const frameKey = `${id}:${idx}:${scale.toFixed(5)}:${annotationsVersion}:${retryVersion}`;
+    const scale = plan.scale;
+    const frameKey = `${id}:${idx}:${rasterIdentity}:${annotationsVersion}:${retryVersion}`;
     if (lastPaintedKey === frameKey) {
       rendering = false;
       return;
@@ -185,7 +434,10 @@
         docId: id,
         pageIndex: idx,
         scale,
+        fullWidth: plan.pixelWidth,
+        fullHeight: plan.pixelHeight,
         version: annotationsVersion,
+        retryVersion,
         priority: isPriority ? 0 : 1,
       });
       request.promise
@@ -196,7 +448,7 @@
         })
         .catch((e: unknown) => {
           if (cancelled || generation !== renderGeneration) return;
-          renderError = String(e);
+          renderError = errorMessage(e);
           rendering = false;
         });
     }, delay);
@@ -271,31 +523,16 @@
 
   $effect(() => {
     if (!inkCanvas) return;
-    inkCanvas.width = cssW * dpr;
-    inkCanvas.height = cssH * dpr;
+    inkCanvas.width = inkPixelWidth;
+    inkCanvas.height = inkPixelHeight;
     const ctx = inkCanvas.getContext("2d");
-    if (ctx) ctx.scale(dpr, dpr);
+    if (ctx) ctx.scale(inkPixelWidth / cssW, inkPixelHeight / cssH);
     drawInk();
   });
 
   // ── Text selection → annotation rects ────────────────────────────────────────
   function clientToPage(clientX: number, clientY: number, pageEl: HTMLElement) {
-    const rect = pageEl.getBoundingClientRect();
-    const displayX = (clientX - rect.left) / Math.max(1, rect.width);
-    const displayY = (clientY - rect.top) / Math.max(1, rect.height);
-
-    const point = rotation === 90
-      ? { nx: displayY, ny: 1 - displayX }
-      : rotation === 180
-        ? { nx: 1 - displayX, ny: 1 - displayY }
-        : rotation === 270
-          ? { nx: 1 - displayY, ny: displayX }
-          : { nx: displayX, ny: displayY };
-
-    return {
-      nx: Math.max(0, Math.min(1, point.nx)),
-      ny: Math.max(0, Math.min(1, point.ny)),
-    };
+    return normalizedPagePoint(clientX, clientY, pageEl.getBoundingClientRect());
   }
 
   function onPointerUp(e: PointerEvent) {
@@ -348,6 +585,7 @@
 
 <div
   class="page-wrapper"
+  bind:this={pageWrapperEl}
   style:width="{displayW}px"
   style:height="{displayH}px"
   aria-label="Page {pageIndex + 1}"
@@ -355,6 +593,7 @@
 >
   <div
     class="page-inner"
+    bind:this={pageInnerEl}
     style:width="{cssW}px"
     style:height="{cssH}px"
     style:top="{innerTop}px"
@@ -376,10 +615,30 @@
         style:height="{cssH}px"
         aria-hidden="true"
       ></canvas>
+      {#if tiledRender && renderPlan}
+        <div class="page-tile-raster" aria-hidden="true">
+          {#each activeTiles as active (`${rasterIdentity}:${active.tile.x},${active.tile.y},${active.tile.width},${active.tile.height}`)}
+            <PageTile
+              {docId}
+              {pageIndex}
+              scale={renderPlan.scale}
+              tile={active.tile}
+              fullWidth={renderPlan.pixelWidth}
+              fullHeight={renderPlan.pixelHeight}
+              cssWidth={cssW}
+              cssHeight={cssH}
+              {annotationsVersion}
+              {retryVersion}
+              priority={active.priority}
+              onRenderError={handleTileRenderError}
+            />
+          {/each}
+        </div>
+      {/if}
     </div>
 
     <!-- Skeleton: shown while loading for the first time -->
-    {#if !hasContent && !renderError}
+    {#if renderPlan && !tiledRender && !hasContent && !displayedRenderError}
       <div class="skeleton" class:skeleton-active={visible && rendering} aria-hidden="true">
         {#if rendering}
           <div class="spinner" aria-hidden="true"></div>
@@ -388,11 +647,18 @@
     {/if}
 
     <!-- Error overlay -->
-    {#if renderError}
-      <div class="error-overlay" title={renderError}>
+    {#if displayedRenderError}
+      <div
+        class="error-overlay"
+        title={displayedRenderError}
+        role="alert"
+        aria-live="polite"
+      >
         <strong>Page could not be rendered</strong>
-        <small class="error-detail">{renderError.slice(0, 120)}</small>
-        <button type="button" onclick={retryRender}>Retry</button>
+        <small class="error-detail">{displayedRenderError.slice(0, 120)}</small>
+        {#if !planError}
+          <button type="button" onclick={retryRender}>Retry</button>
+        {/if}
       </div>
     {/if}
 
@@ -553,7 +819,7 @@
     {#if activeTool === "ink"}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <canvas class="ink-canvas" bind:this={inkCanvas}
-        width={cssW * dpr} height={cssH * dpr}
+        width={inkPixelWidth} height={inkPixelHeight}
         style:width="{cssW}px" style:height="{cssH}px"
         onpointerdown={inkStart} onpointermove={inkMove}
         onpointerup={inkEnd} onpointerleave={inkEnd}
@@ -597,6 +863,11 @@
   .page-raster {
     position: absolute;
     inset: 0;
+  }
+  .page-tile-raster {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
   }
   .page-canvas {
     display: block;

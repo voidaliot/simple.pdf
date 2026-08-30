@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0 — 2026-08-30
+
+- Add a dual-page layout with spread-aware fit modes, navigation, virtualization, and scroll anchoring for mixed-size and rotated documents.
+- Render visible regions in bounded full-resolution tiles so high zoom and high-DPI displays stay sharp without allocating oversized full-page bitmaps.
+- Track monitor DPI changes and preserve the visible document position while rebuilding page rasters at the new device-pixel ratio.
+
 ## 1.2.0 — 2026-08-30
 
 - Match Windows Explorer's compact 40-DIP tab/title bar while using a native WebView2 caption region for reliable touch and pen dragging, horizontal tab swiping, and a preserved blank grab area.

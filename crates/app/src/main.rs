@@ -43,6 +43,7 @@ fn main() {
             commands::pending_open_files,
             // page rendering — raw RGBA pixels via binary IPC (no image codec)
             commands::render_page_pixels,
+            commands::render_page_tile_pixels,
             commands::render_thumb_b64,
             // page data
             commands::get_page_sizes,

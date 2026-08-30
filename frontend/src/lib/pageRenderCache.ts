@@ -1,4 +1,5 @@
-import { renderPagePixels } from "./ipc";
+import { renderPagePixels, renderPageTilePixels, type PagePixelTile } from "./ipc";
+import { renderRasterIdentity } from "./renderScale";
 
 export interface PageFrame {
   width: number;
@@ -6,11 +7,18 @@ export interface PageFrame {
   data: Uint8ClampedArray<ArrayBuffer>;
 }
 
-interface RenderRequest {
+export interface RenderRequest {
   docId: string;
   pageIndex: number;
   scale: number;
+  /** Rounded dimensions of the complete virtual page raster. */
+  fullWidth: number;
+  fullHeight: number;
   version: number;
+  /** Explicit user retry generation; distinct retries must bypass stale frames. */
+  retryVersion: number;
+  /** Device-pixel region. Omit to render the complete page. */
+  tile?: PagePixelTile;
   /** 0 = in the viewport, 1 = speculative prefetch. */
   priority: 0 | 1;
 }
@@ -59,7 +67,11 @@ let nextSequence = 0;
 let processing = false;
 
 function renderKey(request: Omit<RenderRequest, "priority">): string {
-  return `${request.docId}:${request.pageIndex}:${request.scale.toFixed(5)}:${request.version}`;
+  const region = request.tile
+    ? `${request.tile.x},${request.tile.y},${request.tile.width},${request.tile.height}`
+    : "full";
+  const raster = renderRasterIdentity(request.scale, request.fullWidth, request.fullHeight);
+  return `${request.docId}:${request.pageIndex}:${raster}:${region}:${request.version}:${request.retryVersion}`;
 }
 
 function readCache(key: string): PageFrame | undefined {
@@ -140,11 +152,31 @@ async function processQueue() {
         // PDFium serializes access to a document. One frontend render at a time
         // avoids flooding its lock with stale prefetch work and lets newly
         // visible pages move ahead of jobs that have not started yet.
-        const frame = await renderPagePixels(
-          job.request.docId,
-          job.request.pageIndex,
-          job.request.scale,
-        );
+        const frame = job.request.tile
+          ? await renderPageTilePixels(
+              job.request.docId,
+              job.request.pageIndex,
+              job.request.scale,
+              job.request.tile,
+            )
+          : await renderPagePixels(
+              job.request.docId,
+              job.request.pageIndex,
+              job.request.scale,
+            );
+        const expectedWidth = job.request.tile?.width ?? job.request.fullWidth;
+        const expectedHeight = job.request.tile?.height ?? job.request.fullHeight;
+        if (frame.width !== expectedWidth || frame.height !== expectedHeight) {
+          throw new Error(
+            `Renderer returned ${frame.width}x${frame.height}; expected ${expectedWidth}x${expectedHeight}`,
+          );
+        }
+        const expectedBytes = expectedWidth * expectedHeight * 4;
+        if (!Number.isSafeInteger(expectedBytes) || frame.data.byteLength !== expectedBytes) {
+          throw new Error(
+            `Renderer returned ${frame.data.byteLength} RGBA bytes; expected ${expectedBytes}`,
+          );
+        }
         if (job.consumers.size > 0 && !closedDocuments.has(job.request.docId)) {
           writeCache(job.key, frame);
         }

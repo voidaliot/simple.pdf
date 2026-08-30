@@ -9,7 +9,7 @@ pub use annotations::{AnnRect, Annotation};
 pub use error::{PdfError, PdfResult};
 pub use forms::FormField;
 pub use navigation::{LinkTarget, OutlineItem};
-pub use render::{PageSize, RenderRequest};
+pub use render::{PageSize, RenderRequest, RenderTileRequest};
 pub use text::{SearchMatch, SearchRect, SearchResults, TextSpan};
 
 use parking_lot::Mutex;
@@ -27,6 +27,11 @@ use std::sync::{Arc, OnceLock, Weak};
 /// document) also covers opening documents and callers using multiple
 /// [`PdfEngine`] values.
 static PDFIUM_GATE: Mutex<()> = Mutex::new(());
+
+/// Serializes tests that keep documents open while asserting process-wide
+/// resident-memory accounting.
+#[cfg(test)]
+pub(crate) static DOCUMENT_TEST_GATE: Mutex<()> = Mutex::new(());
 
 /// The one PDFium library instance shared by every engine in this process.
 ///

@@ -24,6 +24,7 @@
     setFieldTextValue,
     setFieldChecked,
     resetAllFormFields,
+    type PageSize,
     type TextSpan,
     type Annotation,
     type AnnRect,
@@ -34,6 +35,8 @@
   import Page, { type Highlight } from "../components/Page.svelte";
   import SignatureCapture from "../components/SignatureCapture.svelte";
   import Icon from "../components/Icon.svelte";
+  import { DUAL_PAGE_GAP_PX, selectPageAtVerticalProbe } from "../lib/viewLayout";
+  import { fallbackCssPageDimensions, requestedRenderDimensions } from "../lib/renderScale";
 
   interface Props { tab: Tab; }
   let { tab }: Props = $props();
@@ -48,9 +51,51 @@
   let pagesError = $state("");
   let scrollRestored = false;
   let currentPageLock: number | undefined;
+  let navigationPageLock: number | undefined;
+  let navigationUnlockFrame: number | undefined;
   let pendingContainerSize: { width: number; height: number } | undefined;
   let resizeAnchorFrame: number | undefined;
   let resizeAnchorRunning = false;
+  let renderDpr = $state(
+    Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+      ? window.devicePixelRatio
+      : 1,
+  );
+
+  // devicePixelRatio changes when the window moves between monitors, but the
+  // browser does not expose a dedicated event. Re-arm a resolution media query
+  // after every change and retain resize as a fallback for older WebView2.
+  onMount(() => {
+    let resolutionQuery: MediaQueryList | undefined;
+    const syncDevicePixelRatio = () => {
+      const next = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+        ? window.devicePixelRatio
+        : 1;
+      if (next !== renderDpr) {
+        // Rounded backing dimensions can change CSS page edges by a fraction
+        // of a pixel at a new DPR. Preserve the visible point so those tiny
+        // per-row differences do not accumulate into a scroll jump.
+        void queueZoomAnchor(() => {
+          // The anchor queue may still be busy when the window moves again.
+          // Read the value at execution time so an older queued callback can
+          // never overwrite the most recent monitor DPR.
+          const current = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+            ? window.devicePixelRatio
+            : 1;
+          renderDpr = current;
+        });
+      }
+      resolutionQuery?.removeEventListener("change", syncDevicePixelRatio);
+      resolutionQuery = window.matchMedia(`(resolution: ${next}dppx)`);
+      resolutionQuery.addEventListener("change", syncDevicePixelRatio, { once: true });
+    };
+    syncDevicePixelRatio();
+    window.addEventListener("resize", syncDevicePixelRatio);
+    return () => {
+      window.removeEventListener("resize", syncDevicePixelRatio);
+      resolutionQuery?.removeEventListener("change", syncDevicePixelRatio);
+    };
+  });
 
   // ── Text spans ────────────────────────────────────────────────────────────────
   let textSpansByPage = $state<(TextSpan[] | undefined)[]>([]);
@@ -300,10 +345,48 @@
     return list;
   });
 
+  function clearNavigationPageLock() {
+    if (navigationUnlockFrame !== undefined) cancelAnimationFrame(navigationUnlockFrame);
+    navigationUnlockFrame = undefined;
+    navigationPageLock = undefined;
+  }
+
+  function retainNavigatedPage(pageIndex: number) {
+    clearNavigationPageLock();
+    navigationPageLock = pageIndex;
+    vstore.setCurrentPage(pageIndex);
+    // Let scrollIntoView and both IntersectionObservers settle before normal
+    // viewport selection resumes. Reassert the target after the final frame so
+    // an already-scheduled visibility callback cannot replace it.
+    navigationUnlockFrame = requestAnimationFrame(() => {
+      navigationUnlockFrame = requestAnimationFrame(() => {
+        navigationUnlockFrame = undefined;
+        if (navigationPageLock !== pageIndex) return;
+        navigationPageLock = undefined;
+        vstore.setCurrentPage(pageIndex);
+      });
+    });
+  }
+
+  onDestroy(clearNavigationPageLock);
+
   function scrollToPage(pageIndex: number) {
     if (pageIndex < 0 || pageIndex >= vstore.pageSizes.length) return;
+    retainNavigatedPage(pageIndex);
     container?.querySelector<HTMLElement>(`[data-page-index="${pageIndex}"]`)
       ?.scrollIntoView({ behavior: "auto", block: "start" });
+  }
+
+  function onViewerPointerDown(e: PointerEvent) {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const page = target.closest<HTMLElement>("[data-page-index]");
+    if (!page || !container?.contains(page)) return;
+    const pageIndex = Number(page.dataset.pageIndex);
+    if (Number.isInteger(pageIndex)) {
+      clearNavigationPageLock();
+      vstore.setCurrentPage(pageIndex);
+    }
   }
 
   function handleLinkTarget(target: LinkTarget) {
@@ -466,6 +549,7 @@
   function navigateToMatch(idx: number) {
     const m = findMatches[idx];
     if (!m || !container) return;
+    retainNavigatedPage(m.pageIndex);
     const entry = container.querySelector<HTMLElement>(`[data-page-index="${m.pageIndex}"]`);
     const firstRect = m.rects[0];
     if (!entry || !firstRect) {
@@ -479,8 +563,32 @@
         : vstore.rotation === 270
           ? 1 - firstRect.left - firstRect.width
           : firstRect.top;
-    const targetTop = entry.offsetTop + normalizedTop * entry.offsetHeight - 72;
+    const centerX = firstRect.left + firstRect.width / 2;
+    const centerY = firstRect.top + firstRect.height / 2;
+    const normalizedCenterX = vstore.rotation === 90
+      ? 1 - centerY
+      : vstore.rotation === 180
+        ? 1 - centerX
+        : vstore.rotation === 270
+          ? centerY
+          : centerX;
+    const rootRect = container.getBoundingClientRect();
+    const entryRect = entry.getBoundingClientRect();
+    const targetTop = container.scrollTop
+      + entryRect.top - rootRect.top
+      + normalizedTop * entryRect.height
+      - 72;
     container.scrollTop = Math.max(0, Math.min(targetTop, container.scrollHeight - container.clientHeight));
+    if (container.scrollWidth > container.clientWidth + 1) {
+      const targetLeft = container.scrollLeft
+        + entryRect.left - rootRect.left
+        + normalizedCenterX * entryRect.width
+        - container.clientWidth / 2;
+      container.scrollLeft = Math.max(
+        0,
+        Math.min(targetLeft, container.scrollWidth - container.clientWidth),
+      );
+    }
   }
 
   function nextMatch() {
@@ -558,31 +666,28 @@
 
     const updateCurrentPage = () => {
       viewportSet = new Set(onscreen);
-      if (currentPageLock !== undefined) {
-        vstore.setCurrentPage(currentPageLock);
+      const lockedPage = currentPageLock ?? navigationPageLock;
+      if (lockedPage !== undefined) {
+        vstore.setCurrentPage(lockedPage);
         return;
       }
       const rootRect = root.getBoundingClientRect();
       const probeY = rootRect.top + Math.min(240, rootRect.height * 0.35);
       const candidates = onscreen.size > 0 ? onscreen : nearby;
-      let bestIndex: number | undefined;
-      let bestDistance = Number.POSITIVE_INFINITY;
+      const candidateBounds: { index: number; top: number; bottom: number }[] = [];
 
       for (const idx of candidates) {
         const pageEl = root.querySelector<HTMLElement>(`[data-page-index="${idx}"]`);
         if (!pageEl) continue;
         const rect = pageEl.getBoundingClientRect();
-        const distance = probeY < rect.top
-          ? rect.top - probeY
-          : probeY > rect.bottom
-            ? probeY - rect.bottom
-            : 0;
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestIndex = idx;
-        }
+        candidateBounds.push({ index: idx, top: rect.top, bottom: rect.bottom });
       }
 
+      const bestIndex = selectPageAtVerticalProbe(
+        candidateBounds,
+        probeY,
+        vstore.currentPage,
+      );
       if (bestIndex !== undefined) vstore.setCurrentPage(bestIndex);
     };
 
@@ -698,7 +803,10 @@
     const root = container;
     const lockedPage = vstore.currentPage;
     const entry = root?.querySelector<HTMLElement>(`[data-page-index="${lockedPage}"]`);
-    const before = entry?.getBoundingClientRect();
+    const anchorEntry = vstore.pageLayout === "dual"
+      ? entry?.closest<HTMLElement>(".page-spread") ?? entry
+      : entry;
+    const before = anchorEntry?.getBoundingClientRect();
     const rootBefore = root?.getBoundingClientRect();
     const modeBefore = vstore.zoomMode;
 
@@ -723,7 +831,10 @@
 
       if (container !== root) return;
       const updated = root.querySelector<HTMLElement>(`[data-page-index="${lockedPage}"]`);
-      const after = updated?.getBoundingClientRect();
+      const updatedAnchor = vstore.pageLayout === "dual"
+        ? updated?.closest<HTMLElement>(".page-spread") ?? updated
+        : updated;
+      const after = updatedAnchor?.getBoundingClientRect();
       const rootAfter = root.getBoundingClientRect();
       if (!after) return;
 
@@ -815,21 +926,28 @@
 
       if (pageIndex === undefined || !before) return;
       const updated = root.querySelector<HTMLElement>(`[data-page-index="${pageIndex}"]`);
-      const after = updated?.getBoundingClientRect();
-      if (!after) return;
+      const afterPage = updated?.getBoundingClientRect();
+      const updatedVerticalAnchor = strategy === "page" && vstore.pageLayout === "dual"
+        ? updated?.closest<HTMLElement>(".page-spread") ?? updated
+        : updated;
+      const afterVertical = updatedVerticalAnchor?.getBoundingClientRect();
+      if (!afterPage || !afterVertical) return;
 
       if (strategy === "page") {
         // Fit Page is intentionally centered. Fit Width remains top-aligned so
         // the pages read as one continuous vertical stream.
         const updatedRootRect = root.getBoundingClientRect();
         const verticalInset = vstore.zoomMode === "fit-page"
-          ? Math.max(16, (updatedRootRect.height - after.height) / 2)
+          ? Math.max(16, (updatedRootRect.height - afterVertical.height) / 2)
           : 16;
-        root.scrollTop += after.top - (updatedRootRect.top + verticalInset);
+        root.scrollTop += afterVertical.top - (updatedRootRect.top + verticalInset);
         if (vstore.zoomMode !== "custom" || root.scrollWidth <= root.clientWidth + 1) {
           root.scrollLeft = 0;
         } else {
-          root.scrollLeft += after.left + after.width / 2
+          // An oversized spread can extend well beyond both sides of the
+          // viewport. Keep the active page centered while the row itself is
+          // used only for vertical positioning.
+          root.scrollLeft += afterPage.left + afterPage.width / 2
             - (updatedRootRect.left + updatedRootRect.width / 2);
         }
         if (lockedPage !== undefined) vstore.setCurrentPage(lockedPage);
@@ -838,9 +956,9 @@
         if (vstore.zoomMode !== "custom" || root.scrollWidth <= root.clientWidth + 1) {
           root.scrollLeft = 0;
         } else {
-          root.scrollLeft += after.left + relativeX * after.width - anchorX;
+          root.scrollLeft += afterPage.left + relativeX * afterPage.width - anchorX;
         }
-        root.scrollTop += after.top + relativeY * after.height - anchorY;
+        root.scrollTop += afterPage.top + relativeY * afterPage.height - anchorY;
       }
     } finally {
       if (strategy === "page" && currentPageLock === lockedPage) {
@@ -871,6 +989,14 @@
   async function fitPage() { await queueZoomAnchor(() => vstore.setZoomMode("fit-page"), undefined, undefined, "page"); }
   async function rotateLeft() { await queueZoomAnchor(() => vstore.rotateCcw()); }
   async function rotateRight() { await queueZoomAnchor(() => vstore.rotateCw()); }
+  async function toggleDualPage() {
+    await queueZoomAnchor(
+      () => vstore.setPageLayout(vstore.pageLayout === "dual" ? "single" : "dual"),
+      undefined,
+      undefined,
+      "page",
+    );
+  }
 
   let wheelZoomTimer: ReturnType<typeof setTimeout> | undefined;
   let wheelZoomDirection: -1 | 1 = 1;
@@ -912,10 +1038,7 @@
 
   function onPageInput(e: Event) {
     const val = parseInt((e.target as HTMLInputElement).value, 10) - 1;
-    if (val >= 0 && val < vstore.pageSizes.length) {
-      container?.querySelector<HTMLElement>(`[data-page-index="${val}"]`)
-        ?.scrollIntoView({ behavior: "auto", block: "start" });
-    }
+    if (val >= 0 && val < vstore.pageSizes.length) scrollToPage(val);
   }
 
   async function handleSave() {
@@ -948,10 +1071,40 @@
 
   const zoomPct = $derived(Math.round(vstore.effectiveZoom * 100));
 
+  interface PageSpread {
+    start: number;
+    pages: { index: number; size: PageSize }[];
+  }
+
+  const pageSpreads = $derived.by(() => {
+    const spreads: PageSpread[] = [];
+    for (let start = 0; start < vstore.pageSizes.length; start += 2) {
+      spreads.push({
+        start,
+        pages: vstore.pageSizes
+          .slice(start, start + 2)
+          .map((size, offset) => ({ index: start + offset, size })),
+      });
+    }
+    return spreads;
+  });
+
   function pageDisplaySize(size: { width: number; height: number }, pageIndex: number) {
-    const scale = vstore.zoomForPage(pageIndex) * CSS_PIXELS_PER_POINT;
-    const width = Math.max(1, Math.round(size.width * scale));
-    const height = Math.max(1, Math.round(size.height * scale));
+    const cssScale = vstore.zoomForPage(pageIndex) * CSS_PIXELS_PER_POINT;
+    let width: number;
+    let height: number;
+    try {
+      const dimensions = requestedRenderDimensions(size.width, size.height, cssScale, renderDpr);
+      width = dimensions.pixelWidth / renderDpr;
+      height = dimensions.pixelHeight / renderDpr;
+    } catch {
+      ({ width, height } = fallbackCssPageDimensions(
+        size.width,
+        size.height,
+        cssScale,
+        renderDpr,
+      ));
+    }
     const rotated = vstore.rotation === 90 || vstore.rotation === 270;
     return rotated ? { width: height, height: width } : { width, height };
   }
@@ -998,7 +1151,7 @@
       {/if}
     </div>
 
-    <div class="toolbar-center" aria-label="Zoom controls">
+    <div class="toolbar-center" aria-label="View controls">
       <div class="control-group">
         <button onclick={zoomOut} title="Zoom out (Ctrl+-)" aria-label="Zoom out"><Icon name="minus" /></button>
         <button
@@ -1022,6 +1175,13 @@
           title="Fit page"
           aria-label="Fit page"
         ><Icon name="fit-page" /></button>
+        <button
+          class:active={vstore.pageLayout === "dual"}
+          onclick={toggleDualPage}
+          title="Two-page view"
+          aria-label="Two-page view"
+          aria-pressed={vstore.pageLayout === "dual"}
+        ><Icon name="dual-page" /></button>
       </div>
     </div>
 
@@ -1159,6 +1319,7 @@
       class:width-fitted={vstore.zoomMode !== "custom"}
       bind:this={container}
       onwheel={onWheel}
+      onpointerdown={onViewerPointerDown}
       onscroll={onViewerScroll}
       role="document"
       tabindex="-1"
@@ -1174,50 +1335,62 @@
       {:else if vstore.pageSizes.length === 0}
         <div class="center-msg">No pages found.</div>
       {:else}
-        <div class="pages-list">
-          {#each vstore.pageSizes as size, i}
-            {@const pageMatches = pageHighlights.get(i)}
-            {@const displaySize = pageDisplaySize(size, i)}
-            <div
-              class="page-entry"
-              data-page-index={i}
-              style:width="{displaySize.width}px"
-              style:height="{displaySize.height}px"
-            >
-              {#if renderSet.has(i)}
-                <Page
-                  {docId}
-                  pageIndex={i}
-                  width={size.width}
-                  height={size.height}
-                  zoom={vstore.zoomForPage(i)}
-                  visible={true}
-                  priority={viewportSet.has(i)}
-                  rotation={vstore.rotation}
-                  textSpans={textSpansByPage[i]}
-                  highlights={pageMatches}
-                  annotations={annotsByPage[i]}
-                  annotationsVersion={annotsVersionByPage[i] ?? 0}
-                  formFields={formFieldsByPage[i]}
-                  xfaReadOnly={formType === "xfa_full" || formType === "xfa_foreground"}
-                  activeTool={activeTool}
-                  onPageClick={(left, top) => handlePageClick(i, left, top)}
-                  onTextSelected={(rects) => handleTextSelection(i, rects)}
-                  onInkStroke={(paths) => handleInkStroke(i, paths)}
-                  onDeleteAnnotation={(idx) => handleDeleteAnnotation(i, idx)}
-                  onLinkActivate={handleLinkTarget}
-                  onFieldText={(annotIdx, val) => handleFieldText(i, annotIdx, val)}
-                  onFieldChecked={(annotIdx, val) => handleFieldChecked(i, annotIdx, val)}
-                  onPushButton={(annotIdx) => {
-                      const field = formFieldsByPage[i]?.find(f => f.index === annotIdx);
-                      handlePushButton(i, field?.action_type ?? "reset");
-                    }}
-                  inkColor={toolColor}
-                  {inkWidth}
-                />
-              {:else}
-                <div class="page-placeholder" aria-hidden="true"></div>
-              {/if}
+        <div
+          class="pages-list"
+          class:dual-page={vstore.pageLayout === "dual"}
+          style:--page-gap={`${DUAL_PAGE_GAP_PX}px`}
+        >
+          {#each pageSpreads as spread (spread.start)}
+            <div class="page-spread">
+              {#each spread.pages as page (page.index)}
+                {@const size = page.size}
+                {@const i = page.index}
+                {@const pageMatches = pageHighlights.get(i)}
+                {@const displaySize = pageDisplaySize(size, i)}
+                <div
+                  class="page-entry"
+                  data-page-index={i}
+                  style:width="{displaySize.width}px"
+                  style:height="{displaySize.height}px"
+                >
+                  {#if renderSet.has(i)}
+                    <Page
+                      {docId}
+                      pageIndex={i}
+                      width={size.width}
+                      height={size.height}
+                      zoom={vstore.zoomForPage(i)}
+                      devicePixelRatio={renderDpr}
+                      pageLayout={vstore.pageLayout}
+                      visible={true}
+                      priority={viewportSet.has(i)}
+                      rotation={vstore.rotation}
+                      textSpans={textSpansByPage[i]}
+                      highlights={pageMatches}
+                      annotations={annotsByPage[i]}
+                      annotationsVersion={annotsVersionByPage[i] ?? 0}
+                      formFields={formFieldsByPage[i]}
+                      xfaReadOnly={formType === "xfa_full" || formType === "xfa_foreground"}
+                      activeTool={activeTool}
+                      onPageClick={(left, top) => handlePageClick(i, left, top)}
+                      onTextSelected={(rects) => handleTextSelection(i, rects)}
+                      onInkStroke={(paths) => handleInkStroke(i, paths)}
+                      onDeleteAnnotation={(idx) => handleDeleteAnnotation(i, idx)}
+                      onLinkActivate={handleLinkTarget}
+                      onFieldText={(annotIdx, val) => handleFieldText(i, annotIdx, val)}
+                      onFieldChecked={(annotIdx, val) => handleFieldChecked(i, annotIdx, val)}
+                      onPushButton={(annotIdx) => {
+                          const field = formFieldsByPage[i]?.find(f => f.index === annotIdx);
+                          handlePushButton(i, field?.action_type ?? "reset");
+                        }}
+                      inkColor={toolColor}
+                      {inkWidth}
+                    />
+                  {:else}
+                    <div class="page-placeholder" aria-hidden="true"></div>
+                  {/if}
+                </div>
+              {/each}
             </div>
           {/each}
         </div>
@@ -1422,9 +1595,14 @@
   }
   .pages-area.width-fitted { overflow-x: hidden; }
   .pages-list {
-    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    display: flex; flex-direction: column; align-items: center; gap: var(--page-gap);
     width: max-content; min-width: 100%; padding: 20px 0 64px;
   }
+  .page-spread {
+    display: flex; flex: 0 0 auto; flex-direction: column; align-items: center;
+    justify-content: center; gap: var(--page-gap);
+  }
+  .pages-list.dual-page .page-spread { flex-direction: row; align-items: flex-start; }
   .page-entry {
     position: relative; flex: 0 0 auto;
     contain: strict; content-visibility: auto;

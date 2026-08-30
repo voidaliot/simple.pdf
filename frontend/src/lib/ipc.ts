@@ -138,6 +138,38 @@ export async function renderPagePixels(
     pageIndex,
     scale,
   });
+  return decodePagePixels(payload);
+}
+
+export interface PagePixelTile {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Render one full-resolution page tile using device-pixel coordinates. */
+export async function renderPageTilePixels(
+  docId: string,
+  pageIndex: number,
+  scale: number,
+  tile: PagePixelTile,
+): Promise<{ width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> }> {
+  const payload = await invoke<ArrayBuffer | Uint8Array | number[]>("render_page_tile_pixels", {
+    id: docId,
+    pageIndex,
+    scale,
+    x: tile.x,
+    y: tile.y,
+    width: tile.width,
+    height: tile.height,
+  });
+  return decodePagePixels(payload);
+}
+
+function decodePagePixels(
+  payload: ArrayBuffer | Uint8Array | number[],
+): { width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } {
   const bytes = normalizeBinaryResponse(payload);
   if (bytes.byteLength < 8) throw new Error("Renderer returned an incomplete page frame");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

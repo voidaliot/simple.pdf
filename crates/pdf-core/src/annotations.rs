@@ -552,9 +552,7 @@ fn union_rects(rects: &[AnnRect]) -> Option<AnnRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PdfEngine, RenderRequest, PDFIUM_GATE};
-
-    static TEST_GATE: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    use crate::{PdfEngine, RenderRequest, DOCUMENT_TEST_GATE, PDFIUM_GATE};
 
     fn create_blank_pdf(engine: &PdfEngine, path: &std::path::Path) {
         let _pdfium_guard = PDFIUM_GATE.lock();
@@ -568,7 +566,7 @@ mod tests {
 
     #[test]
     fn markup_and_ink_are_visible_and_survive_save() {
-        let _test_guard = TEST_GATE.lock();
+        let _test_guard = DOCUMENT_TEST_GATE.lock();
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("annotations.pdf");
         let dll_dir =
@@ -715,7 +713,7 @@ mod tests {
 
     #[test]
     fn resident_document_releases_source_handle_and_renders_ipc_frame() {
-        let _test_guard = TEST_GATE.lock();
+        let _test_guard = DOCUMENT_TEST_GATE.lock();
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source.pdf");
         let moved = temp.path().join("moved.pdf");
@@ -753,7 +751,7 @@ mod tests {
 
     #[test]
     fn failed_atomic_save_removes_its_temporary_file() {
-        let _test_guard = TEST_GATE.lock();
+        let _test_guard = DOCUMENT_TEST_GATE.lock();
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source.pdf");
         let destination_directory = temp.path().join("destination");
@@ -780,7 +778,7 @@ mod tests {
 
     #[test]
     fn repeated_open_render_search_close_releases_resident_budgets() {
-        let _test_guard = TEST_GATE.lock();
+        let _test_guard = DOCUMENT_TEST_GATE.lock();
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("soak.pdf");
         let dll_dir =

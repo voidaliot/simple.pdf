@@ -135,6 +135,38 @@ pub async fn render_page_pixels(
     Ok(tauri::ipc::Response::new(buf))
 }
 
+/// Render one device-pixel tile from a page at the page's full requested
+/// scale. The response has the same width/height/RGBA framing as a full page.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn render_page_tile_pixels(
+    id: String,
+    page_index: u32,
+    scale: f32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    state: State<'_, AppState>,
+) -> Result<tauri::ipc::Response, String> {
+    let uid = parse_uuid(&id)?;
+    let doc = get_doc(&uid, &state)?;
+    let buf = run_pdfium(move || {
+        doc.render_page_tile_ipc(pdf_core::RenderTileRequest {
+            page_index,
+            scale,
+            x,
+            y,
+            width,
+            height,
+        })
+        .map_err(|e| e.to_string())
+    })
+    .await?;
+
+    Ok(tauri::ipc::Response::new(buf))
+}
+
 /// Render page 0 of an on-disk PDF at thumbnail size, returned as a data URL.
 /// Thumbnails are small enough that JPEG+base64 is fine here.
 #[tauri::command]
