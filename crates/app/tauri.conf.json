@@ -39,12 +39,6 @@
         "description": "PDF Document",
         "mimeType": "application/pdf",
         "role": "Viewer"
-      },
-      {
-        "ext": ["md", "markdown"],
-        "name": "Markdown Document",
-        "description": "Markdown Document",
-        "role": "Viewer"
       }
     ],
     "icon": [

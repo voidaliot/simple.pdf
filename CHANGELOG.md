@@ -2,7 +2,7 @@
 
 ## 1.4.0 — 2026-09-09
 
-- Replace the initial 1.4.0 build to remove experimental Mermaid and PlantUML rendering, bundled engines, SVG export, and diagram file associations. Markdown previews remain available; fenced blocks display as plain code.
+- Replace the initial 1.4.0 build with a PDF-only release. Remove experimental Mermaid, PlantUML, and Markdown support, their bundled dependencies, preview controls, and file associations.
 - Add visible multiline text placement on PDF pages with adjustable font size, persistent saving, and annotation Undo/removal.
 - Add a form editing control and keep edited text, checkbox, and radio values synchronized when controls reload.
 - Add Print and Ctrl+P for the complete document, including current form values and annotations; connect recognized PDF print buttons to the same action.

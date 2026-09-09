@@ -7,7 +7,6 @@
   import Home from "./routes/Home.svelte";
   import Viewer from "./routes/Viewer.svelte";
   import Settings from "./routes/Settings.svelte";
-  import TextViewer from "./routes/TextViewer.svelte";
   import { tabs } from "./stores/tabs.svelte";
   import { pendingOpenFiles } from "./lib/ipc";
   import { pickAndOpen, openPath } from "./lib/open";
@@ -112,10 +111,6 @@
           <Home />
         {:else if tabs.active.kind === "settings"}
           <Settings />
-        {:else if tabs.active.kind === "text"}
-          {#key tabs.active.id}
-            <TextViewer tab={tabs.active} />
-          {/key}
         {:else}
           {#key tabs.active.id}
             <Viewer tab={tabs.active} />

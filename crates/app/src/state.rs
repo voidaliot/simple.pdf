@@ -207,7 +207,7 @@ pub fn init(
         .to_path_buf();
     let engine = PdfEngine::new(&exe_dir)?;
 
-    let pending = crate::text_documents::file_args(initial_args, &std::env::current_dir()?);
+    let pending = crate::document_paths::file_args(initial_args, &std::env::current_dir()?);
 
     app.manage(AppState {
         text_indexer: TextIndexer::new()?,
@@ -246,7 +246,7 @@ fn scavenge_stale_temporary_downloads() {
 pub fn enqueue_file_args(app: &AppHandle, argv: Vec<String>, cwd: &str) {
     let state = app.state::<AppState>();
     let mut q = state.pending_files.lock();
-    q.extend(crate::text_documents::file_args(
+    q.extend(crate::document_paths::file_args(
         argv,
         std::path::Path::new(cwd),
     ));

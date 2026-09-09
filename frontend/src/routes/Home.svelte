@@ -2,7 +2,6 @@
   import { recents, type RecentEntry } from "../stores/recents.svelte";
   import { pickAndOpen, pickFolderAndOpen, openFromUrl, openPath } from "../lib/open";
   import { revealInExplorer } from "../lib/ipc";
-  import { documentFormat } from "../lib/documentTypes";
 
   let filter = $state("");
   let pasteUrlOpen = $state(false);
@@ -62,7 +61,7 @@
 <section class="home">
   <header>
     <h1>simple<span class="dot">.</span>pdf</h1>
-    <p class="tagline">PDFs and Markdown. All on your device.</p>
+    <p class="tagline">Your PDFs. All on your device.</p>
   </header>
 
   <div class="actions">
@@ -106,7 +105,7 @@
     {#if recents.entries.length === 0}
       <div class="empty">
         <p>No recent files yet.</p>
-        <p class="hint">Open a PDF or Markdown file to get started.</p>
+        <p class="hint">Open a PDF file to get started.</p>
       </div>
     {:else if filtered.length === 0}
       <div class="empty">
@@ -132,7 +131,7 @@
               {#if entry.thumbnail}
                 <img src={entry.thumbnail} alt="" class="thumb-img" />
               {:else}
-                <span class="file-format">{documentFormat(entry.path) ?? "File"}</span>
+                <span class="file-format">PDF</span>
               {/if}
               {#if entry.pinned}<span class="pin-badge">pinned</span>{/if}
             </div>

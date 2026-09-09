@@ -11,8 +11,11 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const executable = path.resolve(process.argv[2] ?? path.join(root, "dist/portable/simple.pdf.exe"));
 const output = path.join(root, "dist/native-smoke");
 fs.mkdirSync(output, { recursive: true });
-const markdown = path.join(output, "smoke-markdown.md");
-fs.writeFileSync(markdown, '# Native Markdown check\n\n```mermaid\ngraph TD\nA-->B\n```\n\n```plantuml\n@startuml\nAlice -> Bob\n@enduml\n```\n');
+const unsupportedPaths = ["md", "markdown", "mmd", "mermaid", "puml", "plantuml", "pu", "uml"].map(extension => {
+  const file = path.join(output, `unsupported.${extension}`);
+  fs.writeFileSync(file, "# Unsupported text document");
+  return file;
+});
 const pdfPath = path.join(output, "native-close-check.pdf");
 const objects = [
   "<< /Type /Catalog /Pages 2 0 R >>",
@@ -79,18 +82,17 @@ async function run(files, inspect) {
   }
 }
 
-await run([markdown], async (page) => {
-  await expect(page.getByRole("tab", { name: "smoke-markdown", exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "smoke-markdown", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Native Markdown check" })).toBeVisible();
-  await expect(page.locator(".text-content pre code")).toHaveCount(2);
-  await expect(page.locator(".text-content pre code").first()).toContainText("A-->B");
-  await expect(page.locator(".text-content pre code").last()).toContainText("Alice -> Bob");
-  await expect(page.locator(".diagram, iframe")).toHaveCount(0);
-  await page.screenshot({ path: path.join(output, "native-markdown.png") });
+await run([...unsupportedPaths, pdfPath], async (page) => {
+  await expect(page.getByRole("tab", { name: "native-close-check", exact: true })).toBeVisible();
+  await expect(page.locator(".page-wrapper")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.locator(".text-viewer")).toHaveCount(0);
+  const files = await page.evaluate(folder => window.__TAURI_INTERNALS__.invoke("list_folder_documents", { path: folder }), output);
+  assert.deepEqual(files.map(file => path.basename(file)), ["native-close-check.pdf"]);
+  await page.screenshot({ path: path.join(output, "native-pdf.png") });
   await page.getByRole("button", { name: "Close", exact: true }).click();
 });
-console.log("PASS: packaged Markdown renders with plain code fences; clean native window closes.");
+console.log("PASS: only PDF files open from CLI and folders; clean native window closes.");
 
 await run([pdfPath], async (page) => {
   await expect(page.locator(".page-wrapper")).toBeVisible({ timeout: 30_000 });

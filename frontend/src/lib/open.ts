@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { closeDocument, openDocument, openTextDocument, listFolderDocuments, downloadUrlToTemp, renderThumbB64 } from "./ipc";
+import { closeDocument, openDocument, listFolderDocuments, downloadUrlToTemp, renderThumbB64 } from "./ipc";
 import { documentPathKey, tabs } from "../stores/tabs.svelte";
 import { recents } from "../stores/recents.svelte";
 import { DOCUMENT_EXTENSIONS, documentFormat } from "./documentTypes";
@@ -12,9 +12,7 @@ export async function pickAndOpen(): Promise<void> {
     const selected = await open({
       multiple: false,
       filters: [
-        { name: "Documents", extensions: DOCUMENT_EXTENSIONS },
-        { name: "PDF", extensions: ["pdf"] },
-        { name: "Markdown", extensions: ["md", "markdown"] },
+        { name: "PDF", extensions: DOCUMENT_EXTENSIONS },
       ],
     });
     if (typeof selected === "string") await openPath(selected);
@@ -26,7 +24,7 @@ export async function pickFolderAndOpen(): Promise<void> {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected !== "string") return;
     const documents = await listFolderDocuments(selected);
-    if (documents.length === 0) notifications.error("No supported documents found in this folder");
+    if (documents.length === 0) notifications.error("No PDF files found in this folder");
     for (const path of documents) await openPath(path).catch(console.error);
   } catch (error) { notifications.error(error); }
 }
@@ -62,13 +60,7 @@ export async function openPath(path: string): Promise<void> {
 
 async function openNewPath(path: string): Promise<void> {
   const format = documentFormat(path);
-  if (!format) throw new Error("Choose a PDF or Markdown file");
-  if (format !== "pdf") {
-    const document = await openTextDocument(path);
-    tabs.openText(document);
-    recents.add(document.path, document.title);
-    return;
-  }
+  if (!format) throw new Error("Choose a PDF file");
   const doc = await openDocument(path);
 
   // A differently-spelled equivalent path may have opened while IPC was in flight.

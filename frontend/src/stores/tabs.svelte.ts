@@ -1,10 +1,10 @@
-import { closeDocument, type TextDocument } from "../lib/ipc";
+import { closeDocument } from "../lib/ipc";
 import { documentPathKey } from "../lib/documentTypes";
 export { documentPathKey } from "../lib/documentTypes";
 import { disposeViewerStore } from "./viewer.svelte";
 import { discardPrompt } from "./discard.svelte";
 
-export type TabKind = "home" | "doc" | "text" | "settings";
+export type TabKind = "home" | "doc" | "settings";
 
 export interface Tab {
   id: string;
@@ -13,7 +13,6 @@ export interface Tab {
   docId?: string;
   path?: string;
   pageCount?: number;
-  textDocument?: TextDocument;
   dirty: boolean;
   changeVersion?: number;
 }
@@ -137,24 +136,6 @@ function createTabsStore() {
     list = list.map((t) => t.id === id ? { ...t, dirty, changeVersion: (t.changeVersion ?? 0) + (dirty ? 1 : 0) } : t);
   }
 
-  function openText(document: TextDocument): Tab {
-    const existing = activatePath(document.path);
-    if (existing) return existing;
-    const tab: Tab = {
-      id: genId(), kind: "text", title: document.title, path: document.path,
-      textDocument: document, dirty: false,
-    };
-    list = [...list, tab];
-    activeId = tab.id;
-    return tab;
-  }
-
-  function updateText(id: string, document: TextDocument) {
-    list = list.map((tab) => tab.id === id ? {
-      ...tab, title: document.title, path: document.path, textDocument: document,
-    } : tab);
-  }
-
   return {
     get list() { return list; },
     get activeId() { return activeId; },
@@ -164,8 +145,6 @@ function createTabsStore() {
     findByPath,
     activatePath,
     openDoc,
-    openText,
-    updateText,
     close,
     activate,
     reorder,

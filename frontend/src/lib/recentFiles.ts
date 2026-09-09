@@ -1,4 +1,4 @@
-import { documentPathKey } from "./documentTypes.ts";
+import { documentFormat, documentPathKey } from "./documentTypes.ts";
 
 export interface RecentEntry {
   path: string;
@@ -18,6 +18,7 @@ export function loadRecents(raw: string | null): RecentEntry[] {
     return value.filter((entry): entry is RecentEntry => {
       if (!entry || typeof entry.path !== "string" || !entry.path || typeof entry.title !== "string"
         || !Number.isFinite(entry.lastOpened) || typeof entry.pinned !== "boolean") return false;
+      if (!documentFormat(entry.path)) return false;
       const key = documentPathKey(entry.path);
       if (seen.has(key)) return false;
       seen.add(key);

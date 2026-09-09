@@ -1,13 +1,11 @@
-export type TextFormat = "markdown";
-export type DocumentFormat = "pdf" | TextFormat;
+export type DocumentFormat = "pdf";
 
-export const DOCUMENT_EXTENSIONS = ["pdf", "md", "markdown"];
+export const DOCUMENT_EXTENSIONS = ["pdf"];
 
 export function documentFormat(path: string): DocumentFormat | null {
   const extension = path.split(/[\\/]/).pop()?.split(".").slice(1).pop()?.toLowerCase();
   switch (extension) {
     case "pdf": return "pdf";
-    case "md": case "markdown": return "markdown";
     default: return null;
   }
 }

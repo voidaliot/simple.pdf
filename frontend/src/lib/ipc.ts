@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { TextFormat } from "./documentTypes";
 
 // ── Basic types ────────────────────────────────────────────────────────────────
 
@@ -8,17 +7,6 @@ export interface OpenedDocument {
   path: string;
   title: string;
   page_count: number;
-}
-
-export interface TextDocument {
-  path: string;
-  title: string;
-  format: TextFormat;
-  source: string;
-}
-
-export async function openTextDocument(path: string): Promise<TextDocument> {
-  return invoke<TextDocument>("open_text_document", { path });
 }
 
 export interface PageSize {

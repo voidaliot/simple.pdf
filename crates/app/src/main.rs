@@ -5,8 +5,8 @@
 
 mod annotation_history;
 mod commands;
+mod document_paths;
 mod state;
-mod text_documents;
 #[cfg(target_os = "windows")]
 mod windows_integration;
 
@@ -43,7 +43,6 @@ fn main() {
             commands::open_document,
             commands::close_document,
             commands::pending_open_files,
-            text_documents::open_text_document,
             // page rendering — raw RGBA pixels via binary IPC (no image codec)
             commands::render_page_pixels,
             commands::render_page_tile_pixels,

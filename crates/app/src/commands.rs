@@ -539,7 +539,7 @@ pub async fn list_folder_documents(path: String) -> Result<Vec<String>, String> 
         for entry in entries {
             let entry = entry.map_err(|error| error.to_string())?;
             let p = entry.path();
-            if p.is_file() && crate::text_documents::is_supported(&p) {
+            if p.is_file() && crate::document_paths::is_supported(&p) {
                 documents.push(user_display_path(&p));
             }
         }

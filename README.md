@@ -1,6 +1,6 @@
 # simple.pdf
 
-A fast, small-footprint, modern PDF reader for Windows with annotations, AcroForms, drawn signatures, and local Markdown previews.
+A fast, small-footprint, modern PDF reader for Windows with annotations, AcroForms, and drawn signatures.
 
 <img width="1201" height="1550" alt="image" src="https://github.com/user-attachments/assets/b75c0cf1-97a9-42d9-9064-2d1370788953" />
 
@@ -8,12 +8,6 @@ A fast, small-footprint, modern PDF reader for Windows with annotations, AcroFor
 ## Status
 
 Current release: 1.4.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
-
-## Markdown
-
-Open `.md` and `.markdown` files through **Open file**, **Open folder**, drag-and-drop, recents, or a command-line path. **View source** shows the complete document; **Reload** (F5 or Ctrl+R) reads edits from disk. Code fences display as plain code.
-
-Text files support UTF-8 and BOM-marked UTF-16, up to 2 MB. Raw Markdown HTML and external images are omitted. HTTP(S) and email links open only when clicked.
 
 ## Design goals
 
