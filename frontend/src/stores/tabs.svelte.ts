@@ -1,7 +1,10 @@
-import { closeDocument } from "../lib/ipc";
+import { closeDocument, type TextDocument } from "../lib/ipc";
+import { documentPathKey } from "../lib/documentTypes";
+export { documentPathKey } from "../lib/documentTypes";
 import { disposeViewerStore } from "./viewer.svelte";
+import { discardPrompt } from "./discard.svelte";
 
-export type TabKind = "home" | "doc" | "settings";
+export type TabKind = "home" | "doc" | "text" | "settings";
 
 export interface Tab {
   id: string;
@@ -10,16 +13,13 @@ export interface Tab {
   docId?: string;
   path?: string;
   pageCount?: number;
+  textDocument?: TextDocument;
   dirty: boolean;
+  changeVersion?: number;
 }
 
 let nextId = 1;
 const genId = () => `t${nextId++}`;
-
-/** Normalize a Windows document path for open-tab comparisons. */
-export function documentPathKey(path: string): string {
-  return path.replaceAll("/", "\\").toLowerCase();
-}
 
 // Pre-compute the initial tab id so activeId doesn't read a $state during
 // its own initializer (avoids the state_referenced_locally Svelte warning).
@@ -51,7 +51,7 @@ function createTabsStore() {
   function findByPath(path: string): Tab | undefined {
     const key = documentPathKey(path);
     return list.find((t) =>
-      t.kind === "doc" && t.path !== undefined && documentPathKey(t.path) === key
+      t.path !== undefined && documentPathKey(t.path) === key
     );
   }
 
@@ -78,14 +78,27 @@ function createTabsStore() {
     return tab;
   }
 
-  function close(id: string): boolean {
-    const idx = list.findIndex((t) => t.id === id);
+  const closingTabs = new Map<string, Promise<boolean>>();
+
+  function close(id: string): Promise<boolean> {
+    const pending = closingTabs.get(id);
+    if (pending) return pending;
+    const closing = closeTab(id).finally(() => closingTabs.delete(id));
+    closingTabs.set(id, closing);
+    return closing;
+  }
+
+  async function closeTab(id: string): Promise<boolean> {
+    let idx = list.findIndex((t) => t.id === id);
     if (idx === -1) return false;
     const removed = list[idx]!;
     if (removed.dirty) {
-      const discard = confirm(`"${removed.title}" has unsaved changes.\nDiscard changes and close?`);
+      const discard = await discardPrompt.request(`Close "${removed.title}" and discard its unsaved changes?`);
       if (!discard) return false;
     }
+
+    idx = list.findIndex((tab) => tab.id === id);
+    if (idx < 0) return false;
 
     list = list.filter((t) => t.id !== id);
 
@@ -113,7 +126,7 @@ function createTabsStore() {
   }
 
   function reorder(from: number, to: number) {
-    if (from === to) return;
+    if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return;
     const copy = [...list];
     const [moved] = copy.splice(from, 1);
     copy.splice(to, 0, moved!);
@@ -121,7 +134,25 @@ function createTabsStore() {
   }
 
   function markDirty(id: string, dirty: boolean) {
-    list = list.map((t) => t.id === id ? { ...t, dirty } : t);
+    list = list.map((t) => t.id === id ? { ...t, dirty, changeVersion: (t.changeVersion ?? 0) + (dirty ? 1 : 0) } : t);
+  }
+
+  function openText(document: TextDocument): Tab {
+    const existing = activatePath(document.path);
+    if (existing) return existing;
+    const tab: Tab = {
+      id: genId(), kind: "text", title: document.title, path: document.path,
+      textDocument: document, dirty: false,
+    };
+    list = [...list, tab];
+    activeId = tab.id;
+    return tab;
+  }
+
+  function updateText(id: string, document: TextDocument) {
+    list = list.map((tab) => tab.id === id ? {
+      ...tab, title: document.title, path: document.path, textDocument: document,
+    } : tab);
   }
 
   return {
@@ -133,6 +164,8 @@ function createTabsStore() {
     findByPath,
     activatePath,
     openDoc,
+    openText,
+    updateText,
     close,
     activate,
     reorder,

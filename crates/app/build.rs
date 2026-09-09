@@ -20,15 +20,18 @@ fn main() {
         if let Some(target_dir) = out_dir.ancestors().nth(3) {
             let dst = target_dir.join("pdfium.dll");
             if let Err(e) = fs::copy(&dll_src, &dst) {
-                println!("cargo:warning=Failed to copy pdfium.dll to {}: {e}", dst.display());
+                println!(
+                    "cargo:warning=Failed to copy pdfium.dll to {}: {e}",
+                    dst.display()
+                );
             }
         }
     } else {
-        println!("cargo:warning=pdfium.dll not found at {}", dll_src.display());
+        println!(
+            "cargo:warning=pdfium.dll not found at {}",
+            dll_src.display()
+        );
     }
 
-    println!(
-        "cargo:rerun-if-changed={}",
-        dll_src.display()
-    );
+    println!("cargo:rerun-if-changed={}", dll_src.display());
 }

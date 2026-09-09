@@ -127,6 +127,12 @@ jobs:
       - name: Run frontend checks
         run: pnpm --dir frontend check
 
+      - name: Run production diagram browser tests
+        run: |
+          pnpm --dir frontend exec playwright install msedge
+          pnpm --dir frontend build
+          pnpm --dir frontend test:browser
+
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
@@ -179,6 +185,9 @@ jobs:
 
       - name: Build portable package
         run: ./scripts/build-portable.ps1
+
+      - name: Test native rendering and window closing
+        run: node frontend/scripts/smoke-windows.mjs
 
       - name: Build NSIS installer
         run: ./scripts/build-installer.ps1

@@ -31,7 +31,7 @@
   const PREFETCH_RENDER_DELAY_MS = 40;
   /** Visible/cache-hit work should paint in the current event-loop turn. */
   const VISIBLE_RENDER_DELAY_MS = 0;
-  type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "ink";
+  type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "freetext" | "ink";
 
   interface Props {
     /** Document ID. */
@@ -748,7 +748,7 @@
                 style:left="{field.rect.left * cssW}px" style:top="{field.rect.top * cssH}px"
                 style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
                 style:font-size="{Math.max(8, field.rect.height * cssH * 0.6)}px"
-                value={field.value} disabled={xfaReadOnly} aria-label={field.name || "Text field"}
+                value={field.value} disabled={xfaReadOnly || field.read_only} aria-label={field.name || "Text field"}
                 oninput={(e) => onFieldText?.(field.index, (e.target as HTMLTextAreaElement).value)}
               ></textarea>
             {:else}
@@ -756,7 +756,7 @@
                 style:left="{field.rect.left * cssW}px" style:top="{field.rect.top * cssH}px"
                 style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
                 style:font-size="{Math.max(8, field.rect.height * cssH * 0.75)}px"
-                value={field.value} disabled={xfaReadOnly} aria-label={field.name || "Text field"}
+                value={field.value} disabled={xfaReadOnly || field.read_only} aria-label={field.name || "Text field"}
                 oninput={(e) => onFieldText?.(field.index, (e.target as HTMLInputElement).value)}
               />
             {/if}
@@ -764,14 +764,14 @@
             <input type="checkbox" class="form-field form-check"
               style:left="{field.rect.left * cssW + (field.rect.width * cssW) / 2 - 8}px"
               style:top="{field.rect.top * cssH + (field.rect.height * cssH) / 2 - 8}px"
-              checked={field.checked} disabled={xfaReadOnly} aria-label={field.name || "Checkbox"}
+              checked={field.checked} disabled={xfaReadOnly || field.read_only} aria-label={field.name || "Checkbox"}
               onchange={(e) => onFieldChecked?.(field.index, (e.target as HTMLInputElement).checked)}
             />
           {:else if field.kind === "radio"}
             <input type="radio" class="form-field form-check"
               style:left="{field.rect.left * cssW + (field.rect.width * cssW) / 2 - 8}px"
               style:top="{field.rect.top * cssH + (field.rect.height * cssH) / 2 - 8}px"
-              checked={field.checked} disabled={xfaReadOnly} name={field.name}
+              checked={field.checked} disabled={xfaReadOnly || field.read_only} name={field.name}
               aria-label={field.name || "Radio button"}
               onchange={(e) => { if ((e.target as HTMLInputElement).checked) onFieldChecked?.(field.index, true); }}
             />
@@ -780,7 +780,7 @@
               style:left="{field.rect.left * cssW}px" style:top="{field.rect.top * cssH}px"
               style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
               style:font-size="{Math.max(8, field.rect.height * cssH * 0.65)}px"
-              disabled={xfaReadOnly} aria-label={field.name || "Dropdown"}
+              disabled={xfaReadOnly || field.read_only} aria-label={field.name || "Dropdown"}
               onchange={(e) => onFieldText?.(field.index, (e.target as HTMLSelectElement).value)}
             >
               {#each field.options as opt}
@@ -792,7 +792,7 @@
               style:left="{field.rect.left * cssW}px" style:top="{field.rect.top * cssH}px"
               style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
               style:font-size="{Math.max(8, field.rect.height * cssH * 0.5)}px"
-              disabled={xfaReadOnly} aria-label={field.name || "List"}
+              disabled={xfaReadOnly || field.read_only} aria-label={field.name || "List"}
               onchange={(e) => onFieldText?.(
                 field.index,
                 Array.from((e.target as HTMLSelectElement).selectedOptions).map((option) => option.value).join(","),
@@ -807,9 +807,9 @@
               style:left="{field.rect.left * cssW}px" style:top="{field.rect.top * cssH}px"
               style:width="{field.rect.width * cssW}px" style:height="{field.rect.height * cssH}px"
               style:font-size="{Math.max(8, field.rect.height * cssH * 0.6)}px"
-              disabled={xfaReadOnly} aria-label={field.name || "Button"}
+              disabled={xfaReadOnly || field.read_only} aria-label={field.name || "Button"}
               onclick={() => onPushButton?.(field.index)}
-            >{field.name || "Reset"}</button>
+            >{field.name || "Button"}</button>
           {/if}
         {/each}
       </div>
@@ -830,7 +830,7 @@
     {/if}
 
     <!-- Text/sticky click capture -->
-    {#if activeTool === "text"}
+    {#if activeTool === "text" || activeTool === "freetext"}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="click-capture" role="presentation"
         onclick={capturePageClick}>

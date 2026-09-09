@@ -9,13 +9,6 @@ use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
-/// One undoable annotation add operation.
-#[derive(Clone)]
-pub struct UndoEntry {
-    pub page_index: u32,
-    pub annot_index: u32,
-}
-
 pub struct AppState {
     // Declared first so shutdown stops and joins the sole index worker before
     // the engine/document fields begin dropping.
@@ -24,7 +17,7 @@ pub struct AppState {
     pub docs: Mutex<HashMap<Uuid, Arc<Document>>>,
     pub pending_files: Mutex<Vec<PathBuf>>,
     /// Per-document stack of added annotations (for Ctrl+Z).
-    pub undo_stacks: Mutex<HashMap<Uuid, Vec<UndoEntry>>>,
+    pub undo_stacks: Mutex<HashMap<Uuid, Arc<Mutex<crate::annotation_history::AnnotationHistory>>>>,
     /// URL downloads owned by this process. Their paths remain valid for Save
     /// and Copy path until the corresponding tab closes.
     temporary_downloads: Mutex<HashSet<PathBuf>>,
@@ -214,15 +207,7 @@ pub fn init(
         .to_path_buf();
     let engine = PdfEngine::new(&exe_dir)?;
 
-    let pending: Vec<PathBuf> = initial_args
-        .into_iter()
-        .map(PathBuf::from)
-        .filter(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
-        })
-        .collect();
+    let pending = crate::text_documents::file_args(initial_args, &std::env::current_dir()?);
 
     app.manage(AppState {
         text_indexer: TextIndexer::new()?,
@@ -258,17 +243,13 @@ fn scavenge_stale_temporary_downloads() {
     }
 }
 
-pub fn enqueue_file_args(app: &AppHandle, argv: Vec<String>) {
+pub fn enqueue_file_args(app: &AppHandle, argv: Vec<String>, cwd: &str) {
     let state = app.state::<AppState>();
     let mut q = state.pending_files.lock();
-    for a in argv {
-        let p = PathBuf::from(a);
-        if p.extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
-        {
-            q.push(p);
-        }
-    }
+    q.extend(crate::text_documents::file_args(
+        argv,
+        std::path::Path::new(cwd),
+    ));
+    drop(q);
     let _ = app.emit("files-queued", ());
 }

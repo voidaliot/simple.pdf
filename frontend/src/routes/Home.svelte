@@ -2,6 +2,7 @@
   import { recents, type RecentEntry } from "../stores/recents.svelte";
   import { pickAndOpen, pickFolderAndOpen, openFromUrl, openPath } from "../lib/open";
   import { revealInExplorer } from "../lib/ipc";
+  import { documentFormat } from "../lib/documentTypes";
 
   let filter = $state("");
   let pasteUrlOpen = $state(false);
@@ -61,7 +62,7 @@
 <section class="home">
   <header>
     <h1>simple<span class="dot">.</span>pdf</h1>
-    <p class="tagline">Fast, small, modern PDF reader.</p>
+    <p class="tagline">PDFs, Mermaid, PlantUML, and Markdown. All on your device.</p>
   </header>
 
   <div class="actions">
@@ -105,7 +106,7 @@
     {#if recents.entries.length === 0}
       <div class="empty">
         <p>No recent files yet.</p>
-        <p class="hint">Open a PDF to get started.</p>
+        <p class="hint">Open a PDF, diagram, or Markdown file to get started.</p>
       </div>
     {:else if filtered.length === 0}
       <div class="empty">
@@ -123,13 +124,15 @@
             onclick={() => openPath(entry.path).catch(console.error)}
             onkeydown={(e) => {
               if (e.key === "Enter" || e.key === " ")
-                openPath(entry.path).catch(console.error);
+                { e.preventDefault(); openPath(entry.path).catch(console.error); }
             }}
             oncontextmenu={(e) => onContextMenu(e, entry)}
           >
             <div class="thumb" aria-hidden="true">
               {#if entry.thumbnail}
                 <img src={entry.thumbnail} alt="" class="thumb-img" />
+              {:else}
+                <span class="file-format">{documentFormat(entry.path) ?? "File"}</span>
               {/if}
               {#if entry.pinned}<span class="pin-badge">pinned</span>{/if}
             </div>
@@ -193,6 +196,7 @@
     max-width: 1200px;
     margin: 0 auto;
   }
+  .file-format { text-transform: uppercase; color: var(--fg-muted); font-size: 12px; letter-spacing: 0.08em; }
   header { margin-bottom: 32px; }
   h1 {
     font-size: 48px;

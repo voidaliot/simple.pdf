@@ -3,8 +3,10 @@
     windows_subsystem = "windows"
 )]
 
+mod annotation_history;
 mod commands;
 mod state;
+mod text_documents;
 #[cfg(target_os = "windows")]
 mod windows_integration;
 
@@ -24,8 +26,8 @@ fn main() {
     let initial_args: Vec<String> = std::env::args().skip(1).collect();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            state::enqueue_file_args(app, argv.into_iter().skip(1).collect());
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            state::enqueue_file_args(app, argv.into_iter().skip(1).collect(), &cwd);
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -41,6 +43,7 @@ fn main() {
             commands::open_document,
             commands::close_document,
             commands::pending_open_files,
+            text_documents::open_text_document,
             // page rendering — raw RGBA pixels via binary IPC (no image codec)
             commands::render_page_pixels,
             commands::render_page_tile_pixels,
@@ -64,12 +67,13 @@ fn main() {
             commands::add_underline_annotation,
             commands::add_strikeout_annotation,
             commands::add_text_annotation,
+            commands::add_page_text,
             commands::add_ink_annotation,
             commands::remove_annotation,
             commands::undo_annotation,
             commands::save_document,
             // file system
-            commands::list_folder_pdfs,
+            commands::list_folder_documents,
             commands::reveal_in_explorer,
             commands::open_external_uri,
             // file association

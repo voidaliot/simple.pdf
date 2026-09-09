@@ -62,6 +62,7 @@ pub async fn open_document(
         .to_string();
     let doc = Arc::new(doc);
     state.docs.lock().insert(id, Arc::clone(&doc));
+    state.undo_stacks.lock().insert(id, Arc::default());
     state.text_indexer.enqueue(Arc::downgrade(&doc), page_count);
     Ok(OpenedDocument {
         id: id.to_string(),
@@ -119,6 +120,7 @@ pub async fn render_page_pixels(
     id: String,
     page_index: u32,
     scale: f32,
+    for_print: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<tauri::ipc::Response, String> {
     // Clone the document handle before entering the blocking pool so the Tauri
@@ -127,8 +129,13 @@ pub async fn render_page_pixels(
     let uid = parse_uuid(&id)?;
     let doc = get_doc(&uid, &state)?;
     let buf = run_pdfium(move || {
-        doc.render_page_ipc(pdf_core::RenderRequest { page_index, scale })
-            .map_err(|e| e.to_string())
+        let request = pdf_core::RenderRequest { page_index, scale };
+        if for_print.unwrap_or(false) {
+            doc.render_print_page_ipc(request)
+        } else {
+            doc.render_page_ipc(request)
+        }
+        .map_err(|e| e.to_string())
     })
     .await?;
 
@@ -293,23 +300,14 @@ pub async fn add_highlight_annotation(
     opacity: f32,
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
-    let uid = parse_uuid(&id)?;
-    let doc = get_doc(&uid, &state)?;
-    let idx = run_pdfium(move || {
-        doc.add_highlight(page_index, &rects, color, opacity)
-            .map_err(|e| e.to_string())
+    with_annotation_history(&id, &state, move |doc, history| {
+        let idx = doc
+            .add_highlight(page_index, &rects, color, opacity)
+            .map_err(|e| e.to_string())?;
+        history.record(page_index, idx);
+        Ok(idx)
     })
-    .await?;
-    state
-        .undo_stacks
-        .lock()
-        .entry(uid)
-        .or_default()
-        .push(crate::state::UndoEntry {
-            page_index,
-            annot_index: idx,
-        });
-    Ok(idx)
+    .await
 }
 
 #[tauri::command]
@@ -320,25 +318,14 @@ pub async fn add_underline_annotation(
     color: [u8; 3],
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
-    let uid = parse_uuid(&id)?;
-    let doc = get_doc(&uid, &state)?;
-    // Underline reuses the highlight path with a different annotation type.
-    // pdfium-render wraps FPDFPage_CreateAnnot(FPDF_ANNOT_UNDERLINE).
-    let idx = run_pdfium(move || {
-        doc.add_underline(page_index, &rects, color)
-            .map_err(|e| e.to_string())
+    with_annotation_history(&id, &state, move |doc, history| {
+        let idx = doc
+            .add_underline(page_index, &rects, color)
+            .map_err(|e| e.to_string())?;
+        history.record(page_index, idx);
+        Ok(idx)
     })
-    .await?;
-    state
-        .undo_stacks
-        .lock()
-        .entry(uid)
-        .or_default()
-        .push(crate::state::UndoEntry {
-            page_index,
-            annot_index: idx,
-        });
-    Ok(idx)
+    .await
 }
 
 #[tauri::command]
@@ -349,23 +336,14 @@ pub async fn add_strikeout_annotation(
     color: [u8; 3],
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
-    let uid = parse_uuid(&id)?;
-    let doc = get_doc(&uid, &state)?;
-    let idx = run_pdfium(move || {
-        doc.add_strikeout(page_index, &rects, color)
-            .map_err(|e| e.to_string())
+    with_annotation_history(&id, &state, move |doc, history| {
+        let idx = doc
+            .add_strikeout(page_index, &rects, color)
+            .map_err(|e| e.to_string())?;
+        history.record(page_index, idx);
+        Ok(idx)
     })
-    .await?;
-    state
-        .undo_stacks
-        .lock()
-        .entry(uid)
-        .or_default()
-        .push(crate::state::UndoEntry {
-            page_index,
-            annot_index: idx,
-        });
-    Ok(idx)
+    .await
 }
 
 #[tauri::command]
@@ -382,23 +360,34 @@ pub async fn add_text_annotation(
     color: [u8; 3],
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
-    let uid = parse_uuid(&id)?;
-    let doc = get_doc(&uid, &state)?;
-    let idx = run_pdfium(move || {
-        doc.add_text_annotation(page_index, left, top, &contents, author.as_deref(), color)
-            .map_err(|e| e.to_string())
+    with_annotation_history(&id, &state, move |doc, history| {
+        let idx = doc
+            .add_text_annotation(page_index, left, top, &contents, author.as_deref(), color)
+            .map_err(|e| e.to_string())?;
+        history.record(page_index, idx);
+        Ok(idx)
     })
-    .await?;
-    state
-        .undo_stacks
-        .lock()
-        .entry(uid)
-        .or_default()
-        .push(crate::state::UndoEntry {
-            page_index,
-            annot_index: idx,
-        });
-    Ok(idx)
+    .await
+}
+
+#[tauri::command]
+pub async fn add_page_text(
+    id: String,
+    page_index: u32,
+    left: f32,
+    top: f32,
+    contents: String,
+    font_size: f32,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    with_annotation_history(&id, &state, move |doc, history| {
+        let index = doc
+            .add_page_text(page_index, left, top, &contents, font_size)
+            .map_err(|e| e.to_string())?;
+        history.record(page_index, index);
+        Ok(index)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -410,23 +399,14 @@ pub async fn add_ink_annotation(
     width: f32,
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
-    let uid = parse_uuid(&id)?;
-    let doc = get_doc(&uid, &state)?;
-    let idx = run_pdfium(move || {
-        doc.add_ink_annotation(page_index, &paths, color, width)
-            .map_err(|e| e.to_string())
+    with_annotation_history(&id, &state, move |doc, history| {
+        let idx = doc
+            .add_ink_annotation(page_index, &paths, color, width)
+            .map_err(|e| e.to_string())?;
+        history.record(page_index, idx);
+        Ok(idx)
     })
-    .await?;
-    state
-        .undo_stacks
-        .lock()
-        .entry(uid)
-        .or_default()
-        .push(crate::state::UndoEntry {
-            page_index,
-            annot_index: idx,
-        });
-    Ok(idx)
+    .await
 }
 
 #[tauri::command]
@@ -436,9 +416,11 @@ pub async fn remove_annotation(
     annot_index: u32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    with_doc(&id, &state, move |doc| {
+    with_annotation_history(&id, &state, move |doc, history| {
         doc.remove_annotation(page_index, annot_index)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        history.removed(page_index, annot_index);
+        Ok(())
     })
     .await
 }
@@ -448,31 +430,17 @@ pub async fn undo_annotation(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<u32>, String> {
-    let uid = parse_uuid(&id)?;
-    let entry = state.undo_stacks.lock().get_mut(&uid).and_then(|s| s.pop());
-    if let Some(e) = entry {
-        let doc = match get_doc(&uid, &state) {
-            Ok(doc) => doc,
-            Err(error) => {
-                state.undo_stacks.lock().entry(uid).or_default().push(e);
-                return Err(error);
-            }
-        };
-        let page_index = e.page_index;
-        let annot_index = e.annot_index;
-        let result = run_pdfium(move || {
-            doc.remove_annotation(page_index, annot_index)
-                .map_err(|error| error.to_string())
-        })
-        .await;
-        if let Err(error) = result {
-            state.undo_stacks.lock().entry(uid).or_default().push(e);
-            return Err(error);
+    with_annotation_history(&id, &state, move |doc, history| {
+        if let Some(entry) = history.last() {
+            doc.remove_annotation(entry.page_index, entry.annot_index)
+                .map_err(|error| error.to_string())?;
+            history.removed(entry.page_index, entry.annot_index);
+            Ok(Some(entry.page_index))
+        } else {
+            Ok(None)
         }
-        Ok(Some(page_index))
-    } else {
-        Ok(None)
-    }
+    })
+    .await
 }
 
 // ── Forms (AcroForms) ─────────────────────────────────────────────────────────
@@ -563,22 +531,23 @@ pub async fn save_document(id: String, state: State<'_, AppState>) -> Result<(),
 // ── File system helpers ────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn list_folder_pdfs(path: String) -> Result<Vec<String>, String> {
-    let dir = std::path::Path::new(&path);
-    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
-    let mut pdfs = Vec::new();
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_file() {
-            if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                if ext.eq_ignore_ascii_case("pdf") {
-                    pdfs.push(p.to_string_lossy().into_owned());
-                }
+pub async fn list_folder_documents(path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = std::path::Path::new(&path);
+        let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+        let mut documents = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let p = entry.path();
+            if p.is_file() && crate::text_documents::is_supported(&p) {
+                documents.push(user_display_path(&p));
             }
         }
-    }
-    pdfs.sort();
-    Ok(pdfs)
+        documents.sort();
+        Ok(documents)
+    })
+    .await
+    .map_err(|error| format!("Could not list folder: {error}"))?
 }
 
 #[tauri::command]
@@ -751,7 +720,7 @@ fn get_doc(uid: &Uuid, state: &State<AppState>) -> Result<Arc<pdf_core::Document
         .ok_or_else(|| "unknown doc id".into())
 }
 
-fn user_display_path(path: &std::path::Path) -> String {
+pub(crate) fn user_display_path(path: &std::path::Path) -> String {
     let path = path.to_string_lossy();
     #[cfg(target_os = "windows")]
     {
@@ -786,4 +755,35 @@ where
     let uid = parse_uuid(id)?;
     let doc = get_doc(&uid, state)?;
     run_pdfium(move || f(&doc)).await
+}
+
+async fn with_annotation_history<T, F>(
+    id: &str,
+    state: &State<'_, AppState>,
+    f: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(
+            &pdf_core::Document,
+            &mut crate::annotation_history::AnnotationHistory,
+        ) -> Result<T, String>
+        + Send
+        + 'static,
+{
+    let uid = parse_uuid(id)?;
+    let doc = get_doc(&uid, state)?;
+    let history = state
+        .undo_stacks
+        .lock()
+        .get(&uid)
+        .cloned()
+        .ok_or("Document is closed")?;
+    run_pdfium(move || {
+        // Hold this per-document lock across the native change and its index
+        // bookkeeping. A closed tab drops the map entry; a late job cannot
+        // recreate a history entry and retain state forever.
+        f(&doc, &mut history.lock())
+    })
+    .await
 }

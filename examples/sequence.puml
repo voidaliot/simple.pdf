@@ -1,0 +1,10 @@
+@startuml
+title Local diagram rendering
+actor Reader
+participant "simple.pdf" as App
+participant "Diagram engine" as Engine
+Reader -> App : Open diagram
+App -> Engine : Render source locally
+Engine --> App : SVG
+App --> Reader : Display preview
+@enduml

@@ -1,13 +1,6 @@
-export interface RecentEntry {
-  path: string;
-  title: string;
-  lastOpened: number;
-  pinned: boolean;
-  /** data: URL thumbnail of page 0, cached after first open. */
-  thumbnail?: string;
-}
-
-const MAX_RECENTS = 50;
+import { documentPathKey } from "../lib/documentTypes";
+import { addRecent, loadRecents, persistRecents, type RecentEntry } from "../lib/recentFiles";
+export type { RecentEntry } from "../lib/recentFiles";
 const KEY = "simplepdf:recents";
 
 function createRecentsStore() {
@@ -15,46 +8,36 @@ function createRecentsStore() {
 
   function load(): RecentEntry[] {
     try {
-      return JSON.parse(localStorage.getItem(KEY) ?? "[]");
+      return loadRecents(localStorage.getItem(KEY));
     } catch {
       return [];
     }
   }
 
   function persist() {
-    localStorage.setItem(KEY, JSON.stringify(entries));
+    persistRecents(localStorage, KEY, entries);
   }
 
   function add(path: string, title: string) {
-    const existing = entries.find((e) => e.path === path);
-    entries = [
-      {
-        path,
-        title,
-        lastOpened: Date.now(),
-        pinned: existing?.pinned ?? false,
-        thumbnail: existing?.thumbnail,
-      },
-      ...entries.filter((e) => e.path !== path),
-    ].slice(0, MAX_RECENTS);
+    entries = addRecent(entries, path, title, Date.now());
     persist();
   }
 
   function remove(path: string) {
-    entries = entries.filter((e) => e.path !== path);
+    entries = entries.filter((e) => documentPathKey(e.path) !== documentPathKey(path));
     persist();
   }
 
   function togglePin(path: string) {
     entries = entries.map((e) =>
-      e.path === path ? { ...e, pinned: !e.pinned } : e
+      documentPathKey(e.path) === documentPathKey(path) ? { ...e, pinned: !e.pinned } : e
     );
     persist();
   }
 
   function setThumbnail(path: string, dataUrl: string) {
     entries = entries.map((e) =>
-      e.path === path ? { ...e, thumbnail: dataUrl } : e
+      documentPathKey(e.path) === documentPathKey(path) ? { ...e, thumbnail: dataUrl } : e
     );
     persist();
   }

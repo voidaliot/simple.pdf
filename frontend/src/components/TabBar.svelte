@@ -85,8 +85,8 @@
     focusTab(target);
   }
 
-  function closeTab(id: string) {
-    if (!tabs.close(id)) return;
+  async function closeTab(id: string) {
+    if (!await tabs.close(id)) return;
     requestAnimationFrame(() => {
       const activeIndex = tabs.list.findIndex((tab) => tab.id === tabs.activeId);
       if (activeIndex >= 0) {

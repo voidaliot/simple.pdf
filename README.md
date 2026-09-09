@@ -1,13 +1,25 @@
 # simple.pdf
 
-A fast, small-footprint, modern PDF reader for Windows with annotations, AcroForms, and drawn-signature support.
+A fast, small-footprint, modern PDF reader for Windows with annotations, AcroForms, drawn signatures, and local Mermaid, PlantUML, and Markdown previews.
 
 <img width="1201" height="1550" alt="image" src="https://github.com/user-attachments/assets/b75c0cf1-97a9-42d9-9064-2d1370788953" />
 
 
 ## Status
 
-Current release: 1.2.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current release: 1.3.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+## Diagrams and Markdown
+
+Open diagram files through **Open file**, **Open folder**, drag-and-drop, recents, or a command-line path:
+
+- Mermaid: `.mmd`, `.mermaid`.
+- PlantUML: `.puml`, `.plantuml`, `.pu`, `.uml`.
+- Markdown: `.md`, `.markdown`, including fenced `mermaid` / `mmd` and `plantuml` / `puml` / `pu` / `uml` blocks. Nested and tilde fences work too.
+
+Both engines are bundled and render offline; no Java, Graphviz installation, or diagram server is required. Each diagram has zoom, fit, source copying, and **Export SVG**. **View source** shows the complete document; **Reload** (F5 or Ctrl+R) reads edits from disk. Multiple PlantUML `@start…` blocks are displayed separately. Try [examples/diagrams.md](examples/diagrams.md).
+
+Text files support UTF-8 and BOM-marked UTF-16, up to 2 MB. Each diagram is limited to 50,000 characters, with at most 100 diagrams per document and 500 Mermaid edges. PlantUML renders with the bundled JavaScript engine's supported diagram types. OpenIconic and emoji assets are bundled. External includes, imported sprite libraries (including C4, ArchiMate, and tupadr3), and remote data are unavailable; inline their contents. The bundled engine does not support Ditaa, Salt wireframes, nwdiag, or library/icon listing commands. Styles-only files need diagram content. Raw Markdown HTML and external images are omitted. HTTP(S) and email links open only when clicked. Diagram viewing does not convert PDF page content into diagram source.
 
 ## Design goals
 
@@ -43,7 +55,7 @@ Building is supported on Windows x64. Install these prerequisites first:
 
 - [Rust](https://rustup.rs/) with the MSVC toolchain. The repository's `rust-toolchain.toml` selects stable Rust and the `x86_64-pc-windows-msvc` target.
 - Visual Studio 2022 Build Tools with **Desktop development with C++** and a Windows 10 or 11 SDK.
-- [Node.js](https://nodejs.org/) 18 or newer and [pnpm](https://pnpm.io/installation).
+- [Node.js](https://nodejs.org/) 22.18 or newer and [pnpm](https://pnpm.io/installation).
 - The Microsoft WebView2 Runtime (included with current Windows 10 and 11 installations).
 
 From PowerShell in the repository root, install dependencies and fetch the pinned PDFium binary:
@@ -63,7 +75,16 @@ Run the static and Rust checks:
 
 ```powershell
 pnpm --dir frontend check
+pnpm --dir frontend test
 cargo test --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+
+# Production rendering regressions in Microsoft Edge (install Edge first).
+pnpm --dir frontend build
+pnpm --dir frontend test:browser
+
+# After building the portable app, with no other simple.pdf instance running:
+node frontend/scripts/smoke-windows.mjs
 ```
 
 Create release artifacts with the supplied scripts:
@@ -78,6 +99,8 @@ Create release artifacts with the supplied scripts:
 ```
 
 ## Publishing releases
+
+The optional local corpus audit compares application output with unmodified Mermaid and writes SVGs plus a JSON report under `dist/diagram-audit`. Start the frontend dev server, then run `node scripts/audit-diagrams.mjs <folder> [<folder> ...]` from the frontend directory. Input files are not modified.
 
 Pushing an annotated semantic-version tag runs the GitHub Actions release workflow. The workflow verifies that the tag matches the versions in `Cargo.toml`, `crates/app/tauri.conf.json`, and `frontend/package.json`; runs the frontend and Rust checks; builds the portable ZIP and NSIS installer; and publishes both assets to a GitHub release.
 
@@ -106,3 +129,5 @@ $env:SIMPLE_PDF_TIMESTAMP_URL = "<certificate provider timestamp URL>"
 ## License
 
 MIT
+
+Runtime dependency notices ship with both Windows packages in `THIRD-PARTY-NOTICES.txt`; the frontend build refreshes them from the installed dependencies.

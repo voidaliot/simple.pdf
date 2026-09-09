@@ -1,27 +1,36 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { closeDocument, openDocument, listFolderPdfs, downloadUrlToTemp, renderThumbB64 } from "./ipc";
+import { closeDocument, openDocument, openTextDocument, listFolderDocuments, downloadUrlToTemp, renderThumbB64 } from "./ipc";
 import { documentPathKey, tabs } from "../stores/tabs.svelte";
 import { recents } from "../stores/recents.svelte";
+import { DOCUMENT_EXTENSIONS, documentFormat } from "./documentTypes";
+import { notifications } from "../stores/notifications.svelte";
 
 const openingByPath = new Map<string, Promise<void>>();
 
 export async function pickAndOpen(): Promise<void> {
-  const selected = await open({
-    multiple: false,
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
-  });
-  if (typeof selected === "string") {
-    await openPath(selected);
-  }
+  try {
+    const selected = await open({
+      multiple: false,
+      filters: [
+        { name: "Documents and diagrams", extensions: DOCUMENT_EXTENSIONS },
+        { name: "PDF", extensions: ["pdf"] },
+        { name: "Mermaid", extensions: ["mmd", "mermaid"] },
+        { name: "PlantUML", extensions: ["puml", "plantuml", "pu", "uml"] },
+        { name: "Markdown", extensions: ["md", "markdown"] },
+      ],
+    });
+    if (typeof selected === "string") await openPath(selected);
+  } catch (error) { notifications.error(error); }
 }
 
 export async function pickFolderAndOpen(): Promise<void> {
-  const selected = await open({ directory: true, multiple: false });
-  if (typeof selected !== "string") return;
-  const pdfs = await listFolderPdfs(selected);
-  for (const p of pdfs) {
-    await openPath(p).catch(console.error);
-  }
+  try {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected !== "string") return;
+    const documents = await listFolderDocuments(selected);
+    if (documents.length === 0) notifications.error("No supported documents found in this folder");
+    for (const path of documents) await openPath(path).catch(console.error);
+  } catch (error) { notifications.error(error); }
 }
 
 export async function openFromUrl(url: string): Promise<void> {
@@ -43,7 +52,10 @@ export async function openPath(path: string): Promise<void> {
     return;
   }
 
-  const opening = openNewPath(path).finally(() => {
+  const opening = openNewPath(path).catch((error: unknown) => {
+    notifications.error(`Could not open ${path.split(/[\\/]/).pop()}: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }).finally(() => {
     openingByPath.delete(key);
   });
   openingByPath.set(key, opening);
@@ -51,6 +63,14 @@ export async function openPath(path: string): Promise<void> {
 }
 
 async function openNewPath(path: string): Promise<void> {
+  const format = documentFormat(path);
+  if (!format) throw new Error("Choose a PDF, Mermaid, PlantUML, or Markdown file");
+  if (format !== "pdf") {
+    const document = await openTextDocument(path);
+    tabs.openText(document);
+    recents.add(document.path, document.title);
+    return;
+  }
   const doc = await openDocument(path);
 
   // A differently-spelled equivalent path may have opened while IPC was in flight.

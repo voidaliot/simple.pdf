@@ -54,12 +54,13 @@ if (-not (Test-Path $DllSrc)) { throw "pdfium.dll not found: $DllSrc" }
 
 # 3. Stage portable directory
 $DistDir = Join-Path $Root "dist\portable"
-if (Test-Path $DistDir) { Remove-Item -Recurse -Force $DistDir }
+# Keep portable user data when rebuilding an existing staging folder.
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
 Write-Host "[2/4] Staging files in dist\portable..."
 Copy-Item $ExeSrc (Join-Path $DistDir "simple.pdf.exe")
 Copy-Item $DllSrc (Join-Path $DistDir "pdfium.dll")
+Copy-Item (Join-Path $Root "frontend\dist\THIRD-PARTY-NOTICES.txt") (Join-Path $DistDir "THIRD-PARTY-NOTICES.txt")
 
 # portable.txt signals the app to use ./data/ instead of %APPDATA%\simple.pdf
 Set-Content -Path (Join-Path $DistDir "portable.txt") -Value "" -Encoding ascii
@@ -69,7 +70,9 @@ $ZipPath = Join-Path $Root "dist\simple.pdf-portable.zip"
 if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }
 
 Write-Host "[3/4] Compressing..."
-Compress-Archive -Path "$DistDir\*" -DestinationPath $ZipPath
+$PackageFiles = @("simple.pdf.exe", "pdfium.dll", "portable.txt", "THIRD-PARTY-NOTICES.txt") |
+    ForEach-Object { Join-Path $DistDir $_ }
+Compress-Archive -LiteralPath $PackageFiles -DestinationPath $ZipPath
 
 # 5. Report
 $SizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 2)

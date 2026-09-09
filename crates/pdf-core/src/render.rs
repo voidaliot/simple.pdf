@@ -318,7 +318,7 @@ impl Document {
     /// Flat RGBA `Vec<u8>` of `width × height × 4` bytes, alpha = 255
     /// everywhere (fully composited against the opaque white background).
     pub fn render_page_raw(&self, req: RenderRequest) -> PdfResult<RawPage> {
-        let (mut rgba, width, height) = self.render_page_bgrx_buffer(req, 0)?;
+        let (mut rgba, width, height) = self.render_page_bgrx_buffer(req, 0, false)?;
         // This scan is pure Rust work. Keep it outside the process-wide
         // PDFium gate so the next native operation can start immediately.
         bgrx_to_rgba_in_place(&mut rgba)?;
@@ -337,7 +337,16 @@ impl Document {
     /// RGBA allocation, and response-buffer copy for every page.
     pub fn render_page_ipc(&self, req: RenderRequest) -> PdfResult<Vec<u8>> {
         const HEADER_LEN: usize = 8;
-        let (mut response, width, height) = self.render_page_bgrx_buffer(req, HEADER_LEN)?;
+        let (mut response, width, height) = self.render_page_bgrx_buffer(req, HEADER_LEN, false)?;
+        bgrx_to_rgba_in_place(&mut response[HEADER_LEN..])?;
+        response[0..4].copy_from_slice(&width.to_le_bytes());
+        response[4..8].copy_from_slice(&height.to_le_bytes());
+        Ok(response)
+    }
+
+    pub fn render_print_page_ipc(&self, req: RenderRequest) -> PdfResult<Vec<u8>> {
+        const HEADER_LEN: usize = 8;
+        let (mut response, width, height) = self.render_page_bgrx_buffer(req, HEADER_LEN, true)?;
         bgrx_to_rgba_in_place(&mut response[HEADER_LEN..])?;
         response[0..4].copy_from_slice(&width.to_le_bytes());
         response[4..8].copy_from_slice(&height.to_le_bytes());
@@ -360,6 +369,7 @@ impl Document {
         &self,
         req: RenderRequest,
         prefix_len: usize,
+        include_forms: bool,
     ) -> PdfResult<(Vec<u8>, u32, u32)> {
         let page_size = self.page_size(req.page_index)?;
         let (px_w, px_h) = checked_render_dimensions(page_size.width, page_size.height, req.scale)?;
@@ -377,6 +387,7 @@ impl Document {
                 full_height: height,
             },
             prefix_len,
+            include_forms,
         )
     }
 
@@ -400,6 +411,7 @@ impl Document {
                 full_height,
             },
             prefix_len,
+            false,
         )
     }
 
@@ -409,6 +421,7 @@ impl Document {
         page_size: &PageSize,
         region: RenderRegion,
         prefix_len: usize,
+        include_forms: bool,
     ) -> PdfResult<(Vec<u8>, u32, u32)> {
         let width = region.width;
         let height = region.height;
@@ -470,7 +483,7 @@ impl Document {
         .set_clear_color(PdfColor::WHITE)
         .render_annotations(true)
         // Interactive widgets are drawn by the HTML form layer.
-        .render_form_data(false)
+        .render_form_data(include_forms)
         .set_reverse_byte_order(false);
 
         self.with_doc(|doc| {

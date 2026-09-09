@@ -253,6 +253,95 @@ impl Document {
         })
     }
 
+    /// Text is stored in a stamp appearance so PDFium can render and save it,
+    /// and the existing annotation delete/undo actions can remove it.
+    pub fn add_page_text(
+        &self,
+        page_index: u32,
+        left: f32,
+        top: f32,
+        contents: &str,
+        font_size: f32,
+    ) -> PdfResult<u32> {
+        if !left.is_finite()
+            || !top.is_finite()
+            || !(0.0..1.0).contains(&left)
+            || !(0.0..1.0).contains(&top)
+            || !font_size.is_finite()
+            || !(6.0..=72.0).contains(&font_size)
+            || contents.trim().is_empty()
+        {
+            return Err(PdfError::Render("Invalid text or placement".into()));
+        }
+        self.with_doc_mut(|doc| {
+            let font = doc.fonts_mut().helvetica();
+            let pages = doc.pages();
+            if page_index >= pages.len() as u32 {
+                return Err(PdfError::InvalidPage(page_index));
+            }
+            let mut page = pages
+                .get(page_index as u16)
+                .map_err(|e| PdfError::Render(e.to_string()))?;
+            page.set_content_regeneration_strategy(PdfPageContentRegenerationStrategy::Manual);
+            let (pw, ph) = page_dims(&page);
+            let mut objects = Vec::new();
+            let mut right = left * pw;
+            let mut bottom = (1.0 - top) * ph;
+            for (line_index, line) in contents.lines().enumerate() {
+                let baseline = (1.0 - top) * ph - font_size * (1.0 + line_index as f32 * 1.25);
+                if baseline < 0.0 {
+                    return Err(PdfError::Render("Text extends below the page".into()));
+                }
+                if line.is_empty() {
+                    continue;
+                }
+                let mut object = PdfPageTextObject::new(doc, line, font, PdfPoints::new(font_size))
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+                object
+                    .set_fill_color(PdfColor::BLACK)
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+                object
+                    .translate(PdfPoints::new(left * pw), PdfPoints::new(baseline))
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+                let bounds = object
+                    .bounds()
+                    .map_err(|e| PdfError::Render(e.to_string()))?;
+                right = right.max(bounds.right().value);
+                bottom = bottom.min(bounds.bottom().value);
+                objects.push(object);
+            }
+            if right > pw {
+                return Err(PdfError::Render(
+                    "Text extends beyond the page; use a new line or smaller font".into(),
+                ));
+            }
+            let annots = page.annotations_mut();
+            let index = annots.len() as u32;
+            let result = (|| {
+                let mut stamp = annots.create_stamp_annotation()?;
+                stamp.set_bounds(PdfRect::new(
+                    PdfPoints::new(bottom),
+                    PdfPoints::new(left * pw),
+                    PdfPoints::new((1.0 - top) * ph),
+                    PdfPoints::new(right),
+                ))?;
+                stamp.set_contents(contents)?;
+                stamp.set_is_printed(true)?;
+                for object in objects {
+                    stamp.objects_mut().add_text_object(object)?;
+                }
+                Ok::<_, PdfiumError>(())
+            })();
+            if let Err(error) = result {
+                if let Ok(annotation) = annots.get(index as usize) {
+                    let _ = annots.delete_annotation(annotation);
+                }
+                return Err(PdfError::Render(error.to_string()));
+            }
+            Ok(index)
+        })
+    }
+
     pub fn add_ink_annotation(
         &self,
         page_index: u32,
@@ -562,6 +651,47 @@ mod tests {
             .create_page_at_end(PdfPagePaperSize::a4())
             .unwrap();
         pdf.save_to_file(path).unwrap();
+    }
+
+    #[test]
+    fn placed_text_renders_persists_and_can_be_removed() {
+        let _test_guard = DOCUMENT_TEST_GATE.lock();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("placed-text.pdf");
+        let engine = PdfEngine::new(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/pdfium"),
+        )
+        .unwrap();
+        create_blank_pdf(&engine, &path);
+        let document = engine.open(&path).unwrap();
+        let request = || RenderRequest {
+            page_index: 0,
+            scale: 1.0,
+        };
+        let blank = document.render_page_raw(request()).unwrap().rgba;
+        let index = document
+            .add_page_text(0, 0.15, 0.2, "Hello world\nSecond line", 14.0)
+            .unwrap();
+        let edited = document.render_page_raw(request()).unwrap().rgba;
+        assert_ne!(blank, edited);
+        assert!(document
+            .add_page_text(0, 0.99, 0.2, "Too wide", 14.0)
+            .is_err());
+        assert!(document
+            .add_page_text(65_536, 0.2, 0.2, "Wrong page", 14.0)
+            .is_err());
+        document.save_to_path(&path).unwrap();
+        drop(document);
+        let document = engine.open(&path).unwrap();
+        assert_eq!(document.render_page_raw(request()).unwrap().rgba, edited);
+        assert_eq!(
+            document.page_annotations(0).unwrap()[index as usize]
+                .contents
+                .as_deref(),
+            Some("Hello world\nSecond line")
+        );
+        document.remove_annotation(0, index).unwrap();
+        assert_eq!(document.render_page_raw(request()).unwrap().rgba, blank);
     }
 
     #[test]

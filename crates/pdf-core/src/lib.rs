@@ -250,6 +250,14 @@ unsafe impl Send for Document {}
 unsafe impl Sync for Document {}
 
 impl Document {
+    pub(crate) fn with_doc_mut<R>(&self, f: impl FnOnce(&mut PdfDocument<'static>) -> R) -> R {
+        let _pdfium_guard = PDFIUM_GATE.lock();
+        let mut inner = self.inner.lock();
+        f(inner
+            .as_mut()
+            .expect("Document accessed after its PdfDocument was closed"))
+    }
+
     pub(crate) fn with_doc<R>(&self, f: impl FnOnce(&PdfDocument<'static>) -> R) -> R {
         // Lock order is always global gate, then document mutex.
         let _pdfium_guard = PDFIUM_GATE.lock();

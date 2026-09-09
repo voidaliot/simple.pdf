@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, untrack } from "svelte";
+  import { notifications } from "../stores/notifications.svelte";
   import type { Tab } from "../stores/tabs.svelte";
   import { tabs } from "../stores/tabs.svelte";
   import { createViewerStore, CSS_PIXELS_PER_POINT } from "../stores/viewer.svelte";
@@ -15,6 +16,7 @@
     addUnderlineAnnotation,
     addStrikeoutAnnotation,
     addTextAnnotation,
+    addPageText,
     addInkAnnotation,
     removeAnnotation,
     undoAnnotation,
@@ -32,6 +34,7 @@
     type LinkTarget,
     type OutlineItem,
   } from "../lib/ipc";
+  import { printDocument } from "../lib/print";
   import Page, { type Highlight } from "../components/Page.svelte";
   import SignatureCapture from "../components/SignatureCapture.svelte";
   import Icon from "../components/Icon.svelte";
@@ -152,6 +155,7 @@
       .then(async () => {
         try {
           await write();
+          for (const page of viewportSet) bumpAnnotsVersion(page);
           if (supersedesAll) {
             failedFormWrites.clear();
           } else {
@@ -213,6 +217,8 @@
   });
 
   function handleFieldText(pageIndex: number, annotIndex: number, value: string) {
+    const field = formFieldsByPage[pageIndex]?.find(field => field.index === annotIndex);
+    if (field) field.value = value;
     queueFormWrite(
       `field:${pageIndex}:${annotIndex}`,
       () => setFieldTextValue(docId, pageIndex, annotIndex, value),
@@ -220,6 +226,15 @@
   }
 
   function handleFieldChecked(pageIndex: number, annotIndex: number, checked: boolean) {
+    const field = formFieldsByPage[pageIndex]?.find(field => field.index === annotIndex);
+    if (field) {
+      if (field.kind === "radio" && checked) {
+        for (const fields of formFieldsByPage) for (const other of fields ?? []) {
+          if (other.kind === "radio" && other.name === field.name) other.checked = false;
+        }
+      }
+      field.checked = checked;
+    }
     queueFormWrite(
       `field:${pageIndex}:${annotIndex}`,
       () => setFieldChecked(docId, pageIndex, annotIndex, checked),
@@ -227,14 +242,14 @@
   }
 
   async function handlePushButton(_pageIndex: number, actionType: string) {
+    if (actionType === "print") { await handlePrint(); return; }
     if (actionType === "submit") {
       alert("Form submission is not supported — please fill and save the PDF, then submit it using your browser or email client.");
       return;
     }
-    if (actionType === "other") return; // print or unknown non-reset action
+    if (actionType !== "reset") return;
 
-    // Reset action: clear all fields in the document (not just the current page),
-    // matching PDF ResetForm semantics when no field-inclusion list is specified.
+    // Clear writable text and checkbox fields across the document.
     try {
       await queueFormWrite(
         "document:reset",
@@ -400,8 +415,40 @@
   }
 
   // ── Annotation tools ──────────────────────────────────────────────────────────
-  type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "ink";
+  type AnnotTool = "none" | "highlight" | "underline" | "strikeout" | "text" | "freetext" | "ink";
   let activeTool = $state<AnnotTool>("none");
+  let textDraft = $state("");
+  let textSize = $state(12);
+  let textPlacement = $state<{ page: number; left: number; top: number } | null>(null);
+  let textSaving = $state(false);
+  let printing = $state(false);
+  let printPage = $state(0);
+  let formsEnabled = $state(true);
+
+  async function handlePrint() {
+    if (printing || textSaving || !vstore.pageSizes.length) return;
+    printing = true;
+    try {
+      if (!await flushFormWrites()) return;
+      await printDocument(docId, tab.title, vstore.pageSizes, page => { printPage = page; });
+    } catch (error) { notifications.error(error); }
+    finally { printing = false; }
+  }
+
+  async function commitText() {
+    if (!textPlacement || textSaving || !textDraft.trim()) return;
+    const placement = textPlacement;
+    textSaving = true;
+    try {
+      await addPageText(docId, placement.page, placement.left, placement.top, textDraft, textSize);
+      tabs.markDirty(tab.id, true);
+      await refreshAnnotations(placement.page);
+      textPlacement = null;
+      textDraft = "";
+    } catch (error) { notifications.error(error); }
+    finally { textSaving = false; }
+  }
+
   let markupOpen = $state(false);
   let toolColor = $state<[number, number, number]>([255, 214, 0]);
   let inkWidth = $state(2);
@@ -411,40 +458,44 @@
     markupOpen = false;
   }
 
+  async function editAnnotation(pageIndex: number, edit: () => Promise<unknown>) {
+    try {
+      await edit();
+      tabs.markDirty(tab.id, true);
+      await refreshAnnotations(pageIndex);
+    } catch (error) { notifications.error(error); }
+  }
+
   async function handlePageClick(pageIndex: number, left: number, top: number) {
+    if (activeTool === "freetext") {
+      textPlacement = { page: pageIndex, left, top };
+      return;
+    }
     if (activeTool !== "text") return;
     const contents = prompt("Sticky note text:");
     if (!contents) return;
-    await addTextAnnotation(docId, pageIndex, left, top, contents, null, toolColor);
-    tabs.markDirty(tab.id, true);
-    await refreshAnnotations(pageIndex);
+    await editAnnotation(pageIndex, () => addTextAnnotation(docId, pageIndex, left, top, contents, null, toolColor));
   }
 
   async function handleTextSelection(pageIndex: number, selRects: AnnRect[]) {
-    if (activeTool === "none" || activeTool === "text" || activeTool === "ink") return;
+    if (activeTool === "none" || activeTool === "freetext" || activeTool === "text" || activeTool === "ink") return;
     if (selRects.length === 0) return;
     if (activeTool === "highlight") {
-      await addHighlightAnnotation(docId, pageIndex, selRects, toolColor, 0.4);
+      await editAnnotation(pageIndex, () => addHighlightAnnotation(docId, pageIndex, selRects, toolColor, 0.4));
     } else if (activeTool === "underline") {
-      await addUnderlineAnnotation(docId, pageIndex, selRects, toolColor);
+      await editAnnotation(pageIndex, () => addUnderlineAnnotation(docId, pageIndex, selRects, toolColor));
     } else if (activeTool === "strikeout") {
-      await addStrikeoutAnnotation(docId, pageIndex, selRects, toolColor);
+      await editAnnotation(pageIndex, () => addStrikeoutAnnotation(docId, pageIndex, selRects, toolColor));
     }
-    tabs.markDirty(tab.id, true);
-    await refreshAnnotations(pageIndex);
     window.getSelection()?.removeAllRanges();
   }
 
   async function handleInkStroke(pageIndex: number, paths: [number, number][][]) {
-    await addInkAnnotation(docId, pageIndex, paths, toolColor, inkWidth);
-    tabs.markDirty(tab.id, true);
-    await refreshAnnotations(pageIndex);
+    await editAnnotation(pageIndex, () => addInkAnnotation(docId, pageIndex, paths, toolColor, inkWidth));
   }
 
   async function handleDeleteAnnotation(pageIndex: number, annotIndex: number) {
-    await removeAnnotation(docId, pageIndex, annotIndex);
-    tabs.markDirty(tab.id, true);
-    await refreshAnnotations(pageIndex);
+    await editAnnotation(pageIndex, () => removeAnnotation(docId, pageIndex, annotIndex));
   }
 
   // ── Signing ───────────────────────────────────────────────────────────────────
@@ -751,6 +802,7 @@
       || target?.isContentEditable;
 
     if (e.ctrlKey) {
+      if (e.key.toLowerCase() === "p") { e.preventDefault(); await handlePrint(); return; }
       if (e.key === "f" || e.key === "F") { e.preventDefault(); openFindBar(); return; }
       if (e.key === "s" || e.key === "S") { e.preventDefault(); await handleSave(); return; }
       if (!isEditing && (e.key === "z" || e.key === "Z")) { e.preventDefault(); await handleUndo(); return; }
@@ -775,7 +827,8 @@
     }
 
     if (e.key === "Escape") {
-      if (findOpen) { e.preventDefault(); closeFindBar(); }
+      if (textPlacement && !textSaving) { textPlacement = null; }
+      else if (findOpen) { e.preventDefault(); closeFindBar(); }
       else if (markupOpen) { markupOpen = false; }
       else if (activeTool !== "none") { activeTool = "none"; }
     }
@@ -1050,11 +1103,12 @@
     if (!await flushFormWrites()) return;
 
     const flushedSequence = formWriteSequence;
+    const savedChangeVersion = tab.changeVersion;
     try {
       await saveDocument(docId);
       // An edit queued while the backend save was in flight was not
       // necessarily included. Keep the tab dirty and require another save.
-      if (flushedSequence !== formWriteSequence || failedFormWrites.size > 0) {
+      if (flushedSequence !== formWriteSequence || failedFormWrites.size > 0 || savedChangeVersion !== tab.changeVersion) {
         syncFormWriteError();
         return;
       }
@@ -1065,8 +1119,13 @@
   }
 
   async function handleUndo() {
-    const pageIndex = await undoAnnotation(docId);
-    if (pageIndex !== null) await refreshAnnotations(pageIndex);
+    try {
+      const pageIndex = await undoAnnotation(docId);
+      if (pageIndex !== null) {
+        tabs.markDirty(tab.id, true);
+        await refreshAnnotations(pageIndex);
+      }
+    } catch (error) { notifications.error(error); }
   }
 
   const zoomPct = $derived(Math.round(vstore.effectiveZoom * 100));
@@ -1111,11 +1170,11 @@
 
   const TOOL_LABELS: Record<AnnotTool, string> = {
     none: "No tool", highlight: "Highlight", underline: "Underline",
-    strikeout: "Strikethrough", text: "Sticky note", ink: "Freehand",
+    strikeout: "Strikethrough", text: "Sticky note", freetext: "Add text", ink: "Freehand",
   };
 
   function toolIcon(tool: Exclude<AnnotTool, "none">): "highlight" | "underline" | "strikeout" | "note" | "ink" {
-    return tool === "text" ? "note" : tool;
+    return tool === "text" || tool === "freetext" ? "note" : tool;
   }
 
   const noResults = $derived(
@@ -1127,6 +1186,7 @@
 
 <section
   class="viewer"
+  inert={printing}
   class:xfa-active={formType === "xfa_full" || formType === "xfa_foreground"}
   aria-label="PDF viewer"
 >
@@ -1252,6 +1312,9 @@
         title="Comments"
         aria-label="Toggle comments"
       ><Icon name="comments" /></button>
+      <button class:active={formsEnabled} onclick={() => { formsEnabled = !formsEnabled; activeTool = "none"; }} title="Edit form fields" aria-label="Edit form fields" aria-pressed={formsEnabled}>Form</button>
+      <button class:active={activeTool === "freetext"} onclick={() => chooseTool("freetext")} title="Place text on a page" aria-label="Add text" aria-pressed={activeTool === "freetext"}>Text</button>
+      <button onclick={handlePrint} disabled={printing} title="Print (Ctrl+P)" aria-label="Print document">{printing ? `${printPage}/${vstore.pageSizes.length}` : "Print"}</button>
       <button onclick={() => { signOpen = true; }} title="Sign" aria-label="Sign document"><Icon name="signature" /></button>
       <button
         onclick={handleSave}
@@ -1263,6 +1326,17 @@
     </div>
   </div>
 
+  {#if activeTool === "freetext" && !textPlacement}
+    <div class="xfa-banner" role="status">Click on a page to place text.</div>
+  {/if}
+  {#if textPlacement}
+    <form class="text-editor" aria-label="Add page text" onsubmit={(event) => { event.preventDefault(); void commitText(); }}>
+      <label>Text <textarea bind:value={textDraft} disabled={textSaving} rows="3" required aria-label="Page text"></textarea></label>
+      <label>Size <input type="number" min="6" max="72" bind:value={textSize} disabled={textSaving} required aria-label="Text size" /> pt</label>
+      <button type="submit" disabled={textSaving || !textDraft.trim()}>Add to page</button>
+      <button type="button" disabled={textSaving} onclick={() => { textPlacement = null; }}>Cancel</button>
+    </form>
+  {/if}
   <!-- ── XFA warning ── -->
   {#if formType === "xfa_full" || formType === "xfa_foreground"}
     <div class="xfa-banner" role="alert">
@@ -1369,7 +1443,7 @@
                       highlights={pageMatches}
                       annotations={annotsByPage[i]}
                       annotationsVersion={annotsVersionByPage[i] ?? 0}
-                      formFields={formFieldsByPage[i]}
+                      formFields={formsEnabled ? formFieldsByPage[i] : undefined}
                       xfaReadOnly={formType === "xfa_full" || formType === "xfa_foreground"}
                       activeTool={activeTool}
                       onPageClick={(left, top) => handlePageClick(i, left, top)}
@@ -1381,7 +1455,7 @@
                       onFieldChecked={(annotIdx, val) => handleFieldChecked(i, annotIdx, val)}
                       onPushButton={(annotIdx) => {
                           const field = formFieldsByPage[i]?.find(f => f.index === annotIdx);
-                          handlePushButton(i, field?.action_type ?? "reset");
+                          handlePushButton(i, field?.action_type ?? "other");
                         }}
                       inkColor={toolColor}
                       {inkWidth}
@@ -1470,14 +1544,16 @@
           targetTop + ny * targetH,
         ]),
       );
-      await addInkAnnotation(docId, currentPage, placedPaths, [0, 0, 0], 2);
-      tabs.markDirty(tab.id, true);
-      await refreshAnnotations(currentPage);
+      await editAnnotation(currentPage, () => addInkAnnotation(docId, currentPage, placedPaths, [0, 0, 0], 2));
     }}
   />
 {/if}
 
 <style>
+  .text-editor { display:flex; gap:12px; align-items:center; padding:12px; background:var(--bg-elev); }
+  .text-editor label { display:flex; gap:6px; align-items:center; }
+  .text-editor textarea { width:300px; }
+  .text-editor input { width:60px; }
   .viewer {
     position: relative; display: flex; flex-direction: column;
     height: 100%; overflow: hidden; background: var(--viewer-bg);

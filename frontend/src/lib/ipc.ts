@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { TextFormat } from "./documentTypes";
 
 // ── Basic types ────────────────────────────────────────────────────────────────
 
@@ -7,6 +8,17 @@ export interface OpenedDocument {
   path: string;
   title: string;
   page_count: number;
+}
+
+export interface TextDocument {
+  path: string;
+  title: string;
+  format: TextFormat;
+  source: string;
+}
+
+export async function openTextDocument(path: string): Promise<TextDocument> {
+  return invoke<TextDocument>("open_text_document", { path });
 }
 
 export interface PageSize {
@@ -127,6 +139,7 @@ export async function renderPagePixels(
   docId: string,
   pageIndex: number,
   scale: number,
+  forPrint = false,
 ): Promise<{ width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> }> {
   // Tauri's custom-protocol transport returns an ArrayBuffer. If WebView2
   // blocks that protocol, Tauri falls back to postMessage and serializes the
@@ -137,6 +150,7 @@ export async function renderPagePixels(
     id: docId,
     pageIndex,
     scale,
+    forPrint,
   });
   return decodePagePixels(payload);
 }
@@ -232,6 +246,7 @@ export interface FormField {
   options: string[];
   checked: boolean;
   multiline: boolean;
+  read_only: boolean;
   rect: AnnRect;
   /** For push buttons: "reset" | "submit" | "other". "none" for non-button fields. */
   action_type: string;
@@ -339,14 +354,18 @@ export async function undoAnnotation(id: string): Promise<number | null> {
   return invoke<number | null>("undo_annotation", { id });
 }
 
+export async function addPageText(id: string, pageIndex: number, left: number, top: number, contents: string, fontSize: number): Promise<number> {
+  return invoke<number>("add_page_text", { id, pageIndex, left, top, contents, fontSize });
+}
+
 export async function saveDocument(id: string): Promise<void> {
   return invoke("save_document", { id });
 }
 
 // ── File system ───────────────────────────────────────────────────────────────
 
-export async function listFolderPdfs(path: string): Promise<string[]> {
-  return invoke<string[]>("list_folder_pdfs", { path });
+export async function listFolderDocuments(path: string): Promise<string[]> {
+  return invoke<string[]>("list_folder_documents", { path });
 }
 
 export async function revealInExplorer(path: string): Promise<void> {
