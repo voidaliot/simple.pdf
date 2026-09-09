@@ -26,10 +26,6 @@ function visit(name, from) {
         const files = readdirSync(directory).filter((file) => /^(licen[cs]e|copying|notice|copyright)(\.|$)/i.test(file));
         const license = files.map((file) => readFileSync(join(directory, file), "utf8")).join("\n\n");
         notices.push(`${id}\nLicense: ${manifest.license ?? "See upstream package"}\nhttps://www.npmjs.com/package/${name}/v/${manifest.version}\n\n${license}`);
-        if (name === "@plantuml/core") {
-          const viz = readFileSync(join(directory, "viz-global.js"), "utf8");
-          notices.push(`Bundled Viz.js / Graphviz third-party notices\n${viz.slice(0, viz.indexOf("*/") + 2)}`);
-        }
         for (const dependency of Object.keys(manifest.dependencies ?? {})) visit(dependency, directory);
         return;
       }

@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     }
   },
   "bundle": {
@@ -41,9 +41,9 @@
         "role": "Viewer"
       },
       {
-        "ext": ["mmd", "mermaid", "puml", "plantuml", "pu", "uml", "md", "markdown"],
-        "name": "Diagram or Markdown Document",
-        "description": "Mermaid, PlantUML, or Markdown Document",
+        "ext": ["md", "markdown"],
+        "name": "Markdown Document",
+        "description": "Markdown Document",
         "role": "Viewer"
       }
     ],

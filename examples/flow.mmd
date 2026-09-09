@@ -1,8 +1,0 @@
-flowchart LR
-  Open[Open a document] --> Type{File type}
-  Type -->|PDF| PDF[PDFium]
-  Type -->|Mermaid| Mermaid[Local Mermaid engine]
-  Type -->|PlantUML| PlantUML[Local PlantUML engine]
-  Mermaid --> Preview[Diagram preview]
-  PlantUML --> Preview
-  Preview --> Export[Export SVG]

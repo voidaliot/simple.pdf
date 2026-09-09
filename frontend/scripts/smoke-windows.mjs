@@ -11,8 +11,8 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const executable = path.resolve(process.argv[2] ?? path.join(root, "dist/portable/simple.pdf.exe"));
 const output = path.join(root, "dist/native-smoke");
 fs.mkdirSync(output, { recursive: true });
-const diagrams = path.join(output, "smoke-diagrams.md");
-fs.writeFileSync(diagrams, '# Native renderer check\n\n```mermaid\nflowchart LR\nA["Line one<br>Line two #dagger;"] --> B[Done]\n```\n\n```plantuml\n\' A commented preamble\n@startuml\nrectangle "<&heart> Local icons"\n@enduml\n```\n');
+const markdown = path.join(output, "smoke-markdown.md");
+fs.writeFileSync(markdown, '# Native Markdown check\n\n```mermaid\ngraph TD\nA-->B\n```\n\n```plantuml\n@startuml\nAlice -> Bob\n@enduml\n```\n');
 const pdfPath = path.join(output, "native-close-check.pdf");
 const objects = [
   "<< /Type /Catalog /Pages 2 0 R >>",
@@ -79,20 +79,18 @@ async function run(files, inspect) {
   }
 }
 
-await run([diagrams], async (page) => {
-  await expect(page.getByRole("tab", { name: "smoke-diagrams", exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "smoke-diagrams", exact: true }).click();
-  await expect(page.locator(".diagram")).toHaveCount(2);
-  for (const diagram of await page.locator(".diagram").all()) {
-    await diagram.scrollIntoViewIfNeeded();
-    await expect(diagram.locator("img")).toBeVisible({ timeout: 30_000 });
-    assert.ok(await diagram.locator("img").evaluate((image) => image.naturalWidth > 0));
-  }
-  await expect(page.locator(".diagram-error")).toHaveCount(0);
-  await page.screenshot({ path: path.join(output, "native-diagrams.png") });
+await run([markdown], async (page) => {
+  await expect(page.getByRole("tab", { name: "smoke-markdown", exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "smoke-markdown", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Native Markdown check" })).toBeVisible();
+  await expect(page.locator(".text-content pre code")).toHaveCount(2);
+  await expect(page.locator(".text-content pre code").first()).toContainText("A-->B");
+  await expect(page.locator(".text-content pre code").last()).toContainText("Alice -> Bob");
+  await expect(page.locator(".diagram, iframe")).toHaveCount(0);
+  await page.screenshot({ path: path.join(output, "native-markdown.png") });
   await page.getByRole("button", { name: "Close", exact: true }).click();
 });
-console.log("PASS: packaged Mermaid and PlantUML render; clean native window closes.");
+console.log("PASS: packaged Markdown renders with plain code fences; clean native window closes.");
 
 await run([pdfPath], async (page) => {
   await expect(page.locator(".page-wrapper")).toBeVisible({ timeout: 30_000 });

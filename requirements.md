@@ -19,7 +19,7 @@ Each requirement has a stable ID (`<CATEGORY>-<AREA>-<NN>`). IDs never change on
 - [x] **FR-VIEW-05** — Zoom 25%–400% plus fit-width and fit-page presets; pinch and Ctrl+Wheel to zoom.
 - [ ] **FR-VIEW-06** — Rotate current page 90° / 180° / 270° for viewing (does not modify the PDF).
 
-- [x] **FR-VIEW-07** — Open Mermaid, PlantUML, and Markdown files through the file dialog, folder open, drag-drop, CLI, and recents. Render diagrams locally, including Markdown code fences, with source inspection, zoom, reload, and SVG export. See README for renderer limits.
+- [x] **FR-VIEW-07** — Open Markdown files through the file dialog, folder open, drag-drop, CLI, and recents, with source inspection and reload. Code fences display as plain code. See README for preview limits.
 
 ## 2. Functional — Tabs & Home (FR-TAB, FR-HOME)
 

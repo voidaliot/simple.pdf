@@ -1,25 +1,19 @@
 # simple.pdf
 
-A fast, small-footprint, modern PDF reader for Windows with annotations, AcroForms, drawn signatures, and local Mermaid, PlantUML, and Markdown previews.
+A fast, small-footprint, modern PDF reader for Windows with annotations, AcroForms, drawn signatures, and local Markdown previews.
 
 <img width="1201" height="1550" alt="image" src="https://github.com/user-attachments/assets/b75c0cf1-97a9-42d9-9064-2d1370788953" />
 
 
 ## Status
 
-Current release: 1.3.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current release: 1.4.0. See [requirements.md](requirements.md) for the authoritative feature list and current implementation status, and [CHANGELOG.md](CHANGELOG.md) for release notes.
 
-## Diagrams and Markdown
+## Markdown
 
-Open diagram files through **Open file**, **Open folder**, drag-and-drop, recents, or a command-line path:
+Open `.md` and `.markdown` files through **Open file**, **Open folder**, drag-and-drop, recents, or a command-line path. **View source** shows the complete document; **Reload** (F5 or Ctrl+R) reads edits from disk. Code fences display as plain code.
 
-- Mermaid: `.mmd`, `.mermaid`.
-- PlantUML: `.puml`, `.plantuml`, `.pu`, `.uml`.
-- Markdown: `.md`, `.markdown`, including fenced `mermaid` / `mmd` and `plantuml` / `puml` / `pu` / `uml` blocks. Nested and tilde fences work too.
-
-Both engines are bundled and render offline; no Java, Graphviz installation, or diagram server is required. Each diagram has zoom, fit, source copying, and **Export SVG**. **View source** shows the complete document; **Reload** (F5 or Ctrl+R) reads edits from disk. Multiple PlantUML `@start…` blocks are displayed separately. Try [examples/diagrams.md](examples/diagrams.md).
-
-Text files support UTF-8 and BOM-marked UTF-16, up to 2 MB. Each diagram is limited to 50,000 characters, with at most 100 diagrams per document and 500 Mermaid edges. PlantUML renders with the bundled JavaScript engine's supported diagram types. OpenIconic and emoji assets are bundled. External includes, imported sprite libraries (including C4, ArchiMate, and tupadr3), and remote data are unavailable; inline their contents. The bundled engine does not support Ditaa, Salt wireframes, nwdiag, or library/icon listing commands. Styles-only files need diagram content. Raw Markdown HTML and external images are omitted. HTTP(S) and email links open only when clicked. Diagram viewing does not convert PDF page content into diagram source.
+Text files support UTF-8 and BOM-marked UTF-16, up to 2 MB. Raw Markdown HTML and external images are omitted. HTTP(S) and email links open only when clicked.
 
 ## Design goals
 
@@ -100,8 +94,6 @@ Create release artifacts with the supplied scripts:
 
 ## Publishing releases
 
-The optional local corpus audit compares application output with unmodified Mermaid and writes SVGs plus a JSON report under `dist/diagram-audit`. Start the frontend dev server, then run `node scripts/audit-diagrams.mjs <folder> [<folder> ...]` from the frontend directory. Input files are not modified.
-
 Pushing an annotated semantic-version tag runs the GitHub Actions release workflow. The workflow verifies that the tag matches the versions in `Cargo.toml`, `crates/app/tauri.conf.json`, and `frontend/package.json`; runs the frontend and Rust checks; builds the portable ZIP and NSIS installer; and publishes both assets to a GitHub release.
 
 ```powershell
@@ -109,7 +101,9 @@ git tag -a v1.2.0 -m "simple.pdf 1.2.0"
 git push origin v1.2.0
 ```
 
-The matching version section must already exist in `CHANGELOG.md`. To sign CI-built binaries, configure these GitHub Actions repository secrets:
+The matching version section must already exist in `CHANGELOG.md`. Published releases are protected from automatic overwrites. An intentional replacement requires updating the tag to the corrected source and manually running **Release** with `replace_published` enabled. The workflow replaces the assets and notes only after all checks and package builds pass.
+
+To sign CI-built binaries, configure these GitHub Actions repository secrets:
 
 - `WINDOWS_CERTIFICATE_BASE64` — base64-encoded PFX certificate
 - `WINDOWS_CERTIFICATE_PASSWORD` — PFX password

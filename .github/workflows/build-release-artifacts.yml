@@ -160,7 +160,7 @@ jobs:
       - name: Run frontend checks
         run: pnpm --dir frontend check
 
-      - name: Run production diagram browser tests
+      - name: Run production browser tests
         run: |
           pnpm --dir frontend exec playwright install msedge
           pnpm --dir frontend build

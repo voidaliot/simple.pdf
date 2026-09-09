@@ -62,7 +62,7 @@
 <section class="home">
   <header>
     <h1>simple<span class="dot">.</span>pdf</h1>
-    <p class="tagline">PDFs, Mermaid, PlantUML, and Markdown. All on your device.</p>
+    <p class="tagline">PDFs and Markdown. All on your device.</p>
   </header>
 
   <div class="actions">
@@ -106,7 +106,7 @@
     {#if recents.entries.length === 0}
       <div class="empty">
         <p>No recent files yet.</p>
-        <p class="hint">Open a PDF, diagram, or Markdown file to get started.</p>
+        <p class="hint">Open a PDF or Markdown file to get started.</p>
       </div>
     {:else if filtered.length === 0}
       <div class="empty">

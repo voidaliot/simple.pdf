@@ -12,6 +12,11 @@ on:
         required: true
         default: "v1.4.0"
         type: string
+      replace_published:
+        description: Replace the assets and notes of an existing public release
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -158,7 +163,7 @@ jobs:
       - name: Run frontend checks
         run: pnpm --dir frontend check
 
-      - name: Run production diagram browser tests
+      - name: Run production browser tests
         run: |
           pnpm --dir frontend exec playwright install msedge
           pnpm --dir frontend build
@@ -320,14 +325,15 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPLACE_PUBLISHED: ${{ github.event_name == 'workflow_dispatch' && inputs.replace_published }}
         run: |
           $tag = $env:RELEASE_TAG
           $repository = "${{ github.repository }}"
           $existingDraft = gh release view $tag --repo $repository --json isDraft --jq '.isDraft' 2>$null
 
           if ($LASTEXITCODE -eq 0) {
-            if ($existingDraft.Trim() -ne 'true') {
-              throw "Release $tag is already public; refusing to overwrite published assets"
+            if ($existingDraft.Trim() -ne 'true' -and $env:REPLACE_PUBLISHED -ne 'true') {
+              throw "Release $tag is already public; use an explicit manual replacement to overwrite published assets"
             }
             gh release upload $tag $env:INSTALLER_ASSET $env:PORTABLE_ASSET --clobber --repo $repository
             if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the release assets' }

@@ -7,15 +7,11 @@ const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TextFormat {
-    Mermaid,
-    Plantuml,
     Markdown,
 }
 
 pub fn text_format(path: &Path) -> Option<TextFormat> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "mmd" | "mermaid" => Some(TextFormat::Mermaid),
-        "puml" | "plantuml" | "pu" | "uml" => Some(TextFormat::Plantuml),
         "md" | "markdown" => Some(TextFormat::Markdown),
         _ => None,
     }
@@ -73,7 +69,7 @@ fn decode_text(bytes: Vec<u8>) -> Result<String, String> {
         String::from_utf8(bytes).map_err(|_| "Save the document as UTF-8 or UTF-16 text")?
     };
     if source.contains('\0') {
-        return Err("Document contains binary data; expected diagram or Markdown text".into());
+        return Err("Document contains binary data; expected Markdown text".into());
     }
     Ok(source
         .trim_start_matches('\u{feff}')
@@ -82,7 +78,7 @@ fn decode_text(bytes: Vec<u8>) -> Result<String, String> {
 }
 
 fn read_document(path: &Path) -> Result<TextDocument, String> {
-    let format = text_format(path).ok_or("Unsupported diagram or Markdown file extension")?;
+    let format = text_format(path).ok_or("Unsupported Markdown file extension")?;
     let canonical = path.canonicalize().map_err(|error| error.to_string())?;
     let file = std::fs::File::open(&canonical).map_err(|error| error.to_string())?;
     let metadata = file.metadata().map_err(|error| error.to_string())?;
@@ -90,7 +86,7 @@ fn read_document(path: &Path) -> Result<TextDocument, String> {
         return Err("Choose a file, not a folder".into());
     }
     if metadata.len() > MAX_TEXT_BYTES {
-        return Err("Diagram and Markdown files are limited to 2 MB".into());
+        return Err("Markdown files are limited to 2 MB".into());
     }
     // Bound the read too: the file may grow after metadata was inspected.
     let mut bytes = Vec::new();
@@ -98,7 +94,7 @@ fn read_document(path: &Path) -> Result<TextDocument, String> {
         .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
     if bytes.len() as u64 > MAX_TEXT_BYTES {
-        return Err("Diagram and Markdown files are limited to 2 MB".into());
+        return Err("Markdown files are limited to 2 MB".into());
     }
     Ok(TextDocument {
         title: canonical
@@ -125,26 +121,39 @@ mod tests {
 
     #[test]
     fn supported_extensions_are_case_insensitive_and_exact() {
-        for extension in [
-            "PDF", "MMD", "mermaid", "puml", "plantuml", "pu", "uml", "md", "markdown",
-        ] {
+        for extension in ["PDF", "md", "MARKDOWN"] {
             assert!(is_supported(Path::new(&format!("example.{extension}"))));
         }
-        for name in ["diagram.puml.exe", "notes.txt", "md", "diagram"] {
+        for name in [
+            "diagram.puml.exe",
+            "notes.txt",
+            "md",
+            "diagram",
+            "flow.mmd",
+            "flow.MERMAID",
+            "class.puml",
+            "class.PLANTUML",
+            "class.pu",
+            "class.uml",
+        ] {
             assert!(!is_supported(Path::new(name)));
         }
     }
 
     #[test]
     fn resolves_cli_paths_against_the_sending_instance() {
-        let cwd = Path::new("C:\\diagrams");
+        let cwd = Path::new("C:\\documents");
         let paths = file_args(
-            vec!["flow.mmd".into(), "--help".into(), "E:\\class.puml".into()],
+            vec![
+                "notes.md".into(),
+                "--help".into(),
+                "E:\\document.pdf".into(),
+            ],
             cwd,
         );
         assert_eq!(
             paths,
-            vec![cwd.join("flow.mmd"), PathBuf::from("E:\\class.puml")]
+            vec![cwd.join("notes.md"), PathBuf::from("E:\\document.pdf")]
         );
     }
 
@@ -177,7 +186,7 @@ mod tests {
     #[test]
     fn rejects_oversized_files_without_reading_them() {
         let path =
-            std::env::temp_dir().join(format!("simplepdf_text_test_{}.mmd", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("simplepdf_text_test_{}.md", uuid::Uuid::new_v4()));
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(MAX_TEXT_BYTES + 1).unwrap();
         drop(file);

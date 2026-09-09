@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { mount, onMount, unmount } from "svelte";
-  import Diagram from "./Diagram.svelte";
-  import { parseTextDocument } from "../lib/diagramSource";
-  import { sanitizeMarkdown } from "../lib/diagramSanitize";
+  import { onMount } from "svelte";
+  import { parseMarkdown } from "../lib/markdown";
+  import { sanitizeMarkdown } from "../lib/markdownSanitize";
   import { openExternalUri, type TextDocument } from "../lib/ipc";
   import { notifications } from "../stores/notifications.svelte";
 
@@ -11,19 +10,13 @@
   // The parent keys this component by the immutable source snapshot.
   const content = $derived.by(() => {
     try {
-      const parsed = parseTextDocument(document.format, document.source);
-      return { ...parsed, html: sanitizeMarkdown(parsed.html), error: "" };
+      return { html: sanitizeMarkdown(parseMarkdown(document.source)), error: "" };
     } catch (error) {
-      return { html: "", diagrams: [], error: error instanceof Error ? error.message : String(error) };
+      return { html: "", error: error instanceof Error ? error.message : String(error) };
     }
   });
 
   onMount(() => {
-    const children = [...root.querySelectorAll<HTMLElement>("[data-diagram-index]")].map((target) => {
-      const index = Number(target.dataset.diagramIndex);
-      const diagram = content.diagrams[index];
-      return diagram ? mount(Diagram, { target, props: { diagram, index, title: document.title } }) : null;
-    });
     const onClick = (event: MouseEvent) => {
       const anchor = (event.target as Element).closest("a");
       if (!anchor) return;
@@ -35,7 +28,6 @@
     root.addEventListener("click", onClick);
     return () => {
       root.removeEventListener("click", onClick);
-      for (const child of children) if (child) void unmount(child);
     };
   });
 </script>
@@ -51,7 +43,7 @@
   .empty { color: var(--fg-muted); }
   .text-content :global(h1), .text-content :global(h2), .text-content :global(h3) { line-height: 1.3; margin: 1.5em 0 0.6em; }
   .text-content :global(h1:first-child) { margin-top: 0; }
-  .text-content :global(pre:not(.diagram-source)) { padding: 16px; overflow: auto; background: var(--bg-elev); border-radius: var(--radius); }
+  .text-content :global(pre) { padding: 16px; overflow: auto; background: var(--bg-elev); border-radius: var(--radius); }
   .text-content :global(code) { font-family: Consolas, monospace; }
   .text-content :global(a) { color: var(--accent); }
   .text-content :global(blockquote) { margin-left: 0; padding-left: 18px; border-left: 3px solid var(--border); color: var(--fg-muted); }

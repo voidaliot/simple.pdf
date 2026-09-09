@@ -12,10 +12,8 @@ export async function pickAndOpen(): Promise<void> {
     const selected = await open({
       multiple: false,
       filters: [
-        { name: "Documents and diagrams", extensions: DOCUMENT_EXTENSIONS },
+        { name: "Documents", extensions: DOCUMENT_EXTENSIONS },
         { name: "PDF", extensions: ["pdf"] },
-        { name: "Mermaid", extensions: ["mmd", "mermaid"] },
-        { name: "PlantUML", extensions: ["puml", "plantuml", "pu", "uml"] },
         { name: "Markdown", extensions: ["md", "markdown"] },
       ],
     });
@@ -64,7 +62,7 @@ export async function openPath(path: string): Promise<void> {
 
 async function openNewPath(path: string): Promise<void> {
   const format = documentFormat(path);
-  if (!format) throw new Error("Choose a PDF, Mermaid, PlantUML, or Markdown file");
+  if (!format) throw new Error("Choose a PDF or Markdown file");
   if (format !== "pdf") {
     const document = await openTextDocument(path);
     tabs.openText(document);
