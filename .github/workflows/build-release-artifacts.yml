@@ -228,6 +228,9 @@ jobs:
           name: native-smoke-diagnostics-${{ github.run_id }}
           path: |
             dist/native-smoke/*.png
+            dist/native-smoke/*.txt
+            dist/native-smoke/*.log
+            dist/simple.pdf-portable.zip
             dist/portable/data/logs/
           if-no-files-found: ignore
 

@@ -32,23 +32,35 @@ pdf += `trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n${xref}\n
 fs.writeFileSync(pdfPath, pdf);
 
 async function run(files, inspect) {
+  const browserLog = path.join(output, `webview-${Date.now()}.log`);
   const child = spawn(executable, files, {
-    cwd: path.dirname(executable), windowsHide: true, stdio: "ignore",
+    cwd: path.dirname(executable), windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
       WEBVIEW2_USER_DATA_FOLDER: path.join(output, "webview-profile"),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9223 --remote-debugging-address=127.0.0.1",
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=9223 --remote-debugging-address=127.0.0.1 --enable-logging --log-file="${browserLog}"`,
     },
   });
   let exited = false;
+  let spawnError;
+  let stderr = "";
+  child.on("error", error => { spawnError = error; });
+  child.stdout.on("data", data => { process.stdout.write(data); });
+  child.stderr.on("data", data => { stderr = (stderr + data).slice(-16000); });
   const exit = new Promise((resolve) => child.once("exit", (code) => { exited = true; resolve(code); }));
   let browser;
+  let connectionError;
   try {
-    for (let attempt = 0; attempt < 60 && !browser && !exited; attempt++) {
-      try { browser = await chromium.connectOverCDP("http://127.0.0.1:9223"); }
-      catch { await new Promise((resolve) => setTimeout(resolve, 250)); }
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline && !browser && !exited && !spawnError) {
+      try { browser = await chromium.connectOverCDP("http://127.0.0.1:9223", { timeout: 2000 }); }
+      catch (error) { connectionError = error; await new Promise((resolve) => setTimeout(resolve, 500)); }
     }
-    assert.ok(browser, "Native app did not start; close any existing simple.pdf instance before this test.");
+    if (!browser) {
+      const diagnostic = `Native smoke connection failed. PID=${child.pid}, exited=${exited}, exitCode=${child.exitCode}, spawnError=${spawnError ?? "none"}\n${connectionError}\n${stderr}`;
+      fs.writeFileSync(path.join(output, "startup-error.txt"), diagnostic);
+      throw new Error(diagnostic);
+    }
     const context = browser.contexts()[0];
     const page = context.pages()[0] ?? await context.waitForEvent("page");
     await page.waitForURL("http://tauri.localhost/**");

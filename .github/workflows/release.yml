@@ -40,6 +40,20 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      # Manual retries use the repaired test harness while compiling the tagged app source.
+      - name: Check out smoke test from workflow revision
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: .release-ci
+          sparse-checkout: frontend/scripts/smoke-windows.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Use current native smoke test
+        if: github.event_name == 'workflow_dispatch'
+        run: Copy-Item -LiteralPath '.release-ci/frontend/scripts/smoke-windows.mjs' -Destination 'frontend/scripts/smoke-windows.mjs' -Force
+
       - name: Validate tag and versions
         run: |
           $tag = $env:RELEASE_TAG
@@ -213,6 +227,9 @@ jobs:
           name: native-smoke-diagnostics-${{ github.run_id }}
           path: |
             dist/native-smoke/*.png
+            dist/native-smoke/*.txt
+            dist/native-smoke/*.log
+            dist/simple.pdf-portable.zip
             dist/portable/data/logs/
           if-no-files-found: ignore
 
