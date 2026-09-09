@@ -9,7 +9,7 @@ on:
       version:
         description: Version to build (must match the checked-out manifests)
         required: true
-        default: "1.3.0"
+        default: "1.4.0"
         type: string
 
 permissions:
@@ -118,6 +118,38 @@ jobs:
       - name: Install NSIS
         run: choco install nsis --yes --no-progress
 
+      - name: Ensure WebView2 Runtime for native tests
+        run: |
+          $runtimeKeys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          function Get-WebView2Version {
+            foreach ($key in $runtimeKeys) {
+              $version = (Get-ItemProperty -LiteralPath $key -Name pv -ErrorAction SilentlyContinue).pv
+              if ($version -and $version -ne '0.0.0.0') { return $version }
+            }
+          }
+          $version = Get-WebView2Version
+          if (-not $version) {
+            Write-Host 'WebView2 Runtime is absent; installing the Microsoft Evergreen Runtime.'
+            $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+              throw 'WebView2 installer does not have a valid Microsoft signature'
+            }
+            $install = Start-Process -FilePath $installer -ArgumentList '/silent', '/install' -WindowStyle Hidden -Wait -PassThru
+            Write-Host "WebView2 installer exit code: $($install.ExitCode)"
+            for ($attempt = 0; $attempt -lt 60 -and -not $version; $attempt++) {
+              $version = Get-WebView2Version
+              if (-not $version) { Start-Sleep -Seconds 2 }
+            }
+            if (-not $version) { throw 'WebView2 Runtime was not registered after installation' }
+          }
+          Write-Host "WebView2 Runtime version: $version"
+
       - name: Fetch PDFium
         run: ./scripts/fetch-pdfium.ps1
 
@@ -188,6 +220,16 @@ jobs:
 
       - name: Test native rendering and window closing
         run: node frontend/scripts/smoke-windows.mjs
+
+      - name: Upload native smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-smoke-diagnostics-${{ github.run_id }}
+          path: |
+            dist/native-smoke/*.png
+            dist/portable/data/logs/
+          if-no-files-found: ignore
 
       - name: Build NSIS installer
         run: ./scripts/build-installer.ps1
