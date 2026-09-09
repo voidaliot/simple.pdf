@@ -1,0 +1,60 @@
+name: Diagnose native release startup
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run:
+        description: Failed release run containing the diagnostic portable package
+        required: true
+        default: "34375993790"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025-vs2026]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install test dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.2 --activate
+          pnpm --dir frontend install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run }}
+          name: native-smoke-diagnostics-${{ inputs.artifact_run }}
+          path: dist/downloaded-release
+      - name: Extract unchanged portable package
+        run: Expand-Archive -LiteralPath 'dist/downloaded-release/simple.pdf-portable.zip' -DestinationPath 'dist/portable'
+      - name: Test native startup
+        run: node frontend/scripts/smoke-windows.mjs
+      - name: Collect process diagnostics
+        if: failure()
+        run: |
+          Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'simple|webview|msedge' } | Select-Object Name,ProcessId,ParentProcessId,CommandLine | Format-List
+          Get-ChildItem 'dist/native-smoke' -File -Include '*.txt','*.log' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Tail 60 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: startup-${{ matrix.os }}-${{ github.run_id }}
+          path: |
+            dist/native-smoke/*.png
+            dist/native-smoke/*.txt
+            dist/native-smoke/*.log
+            dist/portable/data/logs/
