@@ -22,7 +22,8 @@ concurrency:
 jobs:
   windows-x64:
     name: Build Windows x64 artifacts
-    runs-on: windows-latest
+    # The same portable binary passes native smoke on 2022; the 2025/VS2026 image hangs before WebView2 starts.
+    runs-on: windows-2022
     timeout-minutes: 45
 
     defaults:
